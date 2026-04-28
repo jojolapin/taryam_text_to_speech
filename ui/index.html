@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TextSpeak Pro</title>
+<!-- (C) 2026 JojoLapin Inc. TextSpeak Pro - offline neural TTS powered by Piper. -->
+<style>
+  :root {
+    --accent:        #6aa2ff;
+    --accent2:       #a78bfa;
+    --accent-soft:   rgba(106,162,255,.18);
+    --success:       #34d399;
+    --warning:       #fbbf24;
+    --danger:        #ef4444;
+    --radius-sm:     10px;
+    --radius:        16px;
+    --radius-lg:     20px;
+    --radius-xl:     28px;
+    --shadow-card:   0 20px 48px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.08);
+    --shadow-hover:  0 24px 60px rgba(0,0,0,.35), 0 4px 14px rgba(0,0,0,.12);
+    --spring:        cubic-bezier(.22,.95,.3,1.2);
+    --ease:          cubic-bezier(.4,0,.2,1);
+    --title-h:       44px;
+  }
+  [data-theme="dark"] {
+    --bg:            #0a0d18;
+    --bg2:           #0f1426;
+    --card:          rgba(22,28,48,.72);
+    --card-solid:    #161c30;
+    --surface:       rgba(255,255,255,.04);
+    --text:          #e8ebf4;
+    --text-soft:     #b0b8cc;
+    --muted:         #8590ad;
+    --border:        rgba(255,255,255,.08);
+    --border-strong: rgba(255,255,255,.14);
+    --ring:          rgba(106,162,255,.28);
+    --glow:          rgba(167,139,250,.35);
+    --backdrop:      rgba(6,10,24,.55);
+  }
+  [data-theme="light"] {
+    --bg:            #eef2fb;
+    --bg2:           #f7f9ff;
+    --card:          rgba(255,255,255,.76);
+    --card-solid:    #ffffff;
+    --surface:       rgba(0,0,0,.03);
+    --text:          #0e1324;
+    --text-soft:     #334060;
+    --muted:         #5a6682;
+    --border:        rgba(14,19,36,.09);
+    --border-strong: rgba(14,19,36,.16);
+    --ring:          rgba(59,130,246,.25);
+    --glow:          rgba(167,139,250,.35);
+    --backdrop:      rgba(245,247,255,.6);
+    --accent:        #3b82f6;
+    --accent2:       #8b5cf6;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: transparent;
+    color: var(--text);
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    font-feature-settings: 'tnum' 1, 'ss01' 1;
+    line-height: 1.55;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Mesh gradient behind everything (shows on top of Mica or solid bg) */
+  body::before {
+    content: ''; position: fixed; inset: -20%;
+    background:
+      radial-gradient(60% 45% at 15% 15%, color-mix(in oklab, var(--accent) 55%, transparent) 0%, transparent 60%),
+      radial-gradient(55% 45% at 85% 20%, color-mix(in oklab, var(--accent2) 50%, transparent) 0%, transparent 60%),
+      radial-gradient(70% 55% at 50% 100%, color-mix(in oklab, var(--accent) 40%, transparent) 0%, transparent 65%),
+      var(--bg);
+    filter: blur(40px) saturate(120%);
+    opacity: .85;
+    z-index: -2;
+    animation: mesh 30s ease-in-out infinite alternate;
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0;
+    background: var(--backdrop);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    z-index: -1;
+  }
+  @keyframes mesh {
+    0%   { transform: translate(0,0)    scale(1);   }
+    50%  { transform: translate(2%,-1%) scale(1.04); }
+    100% { transform: translate(-2%,1%) scale(.98); }
+  }
+
+  /* ============================================================
+     No-Mica fallback (older Win10, non-Win11, VMs, remote desktop,
+     weak GPU). Set by Python on boot via documentElement.classList.
+     Without a compositor backdrop to lean on, heavy backdrop-filters
+     and long-running gradient animations cause visible jitter on
+     every move/resize. Replace them with solid, static surfaces.
+     ============================================================ */
+  html.no-mica body         { background: var(--bg); }
+  html.no-mica body::before { animation: none; opacity: .6; filter: blur(30px) saturate(110%); }
+  html.no-mica body::after  { display: none; }
+  html.no-mica .status,
+  html.no-mica .card,
+  html.no-mica .drawer,
+  html.no-mica .modal,
+  html.no-mica .menu,
+  html.no-mica .chip,
+  html.no-mica .toast {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background-color: var(--card-solid) !important;
+  }
+  /* Respect the OS "reduce motion" accessibility setting too */
+  @media (prefers-reduced-motion: reduce) {
+    body::before { animation: none; }
+    .status.playing .dot,
+    .status.loading .dot { animation: none !important; }
+  }
+
+  /* ============================== Title bar ============================== */
+  .title-bar {
+    height: var(--title-h);
+    display: flex;
+    align-items: center;
+    padding: 0 8px 0 16px;
+    background: transparent;
+    user-select: none;
+    position: relative;
+    z-index: 5;
+  }
+  .title-bar .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; letter-spacing: .2px;
+  }
+  .title-bar .logo .tm { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+  .title-bar .logo svg { width: 22px; height: 22px; color: var(--accent); }
+  .title-bar .drag {
+    flex: 1; height: 100%;
+    -webkit-app-region: drag;     /* no-op in QtWebEngine, harmless */
+    cursor: default;
+  }
+  .title-bar .win-btn {
+    width: 42px; height: var(--title-h);
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--text-soft);
+    border: 0; border-radius: 0;
+    transition: background .15s var(--ease), color .15s var(--ease);
+    cursor: pointer;
+  }
+  .title-bar .win-btn:hover { background: var(--surface); color: var(--text); }
+  .title-bar .win-btn.close:hover { background: #e81123; color: #fff; }
+  .title-bar .win-btn svg { width: 11px; height: 11px; }
+
+  /* Native resize hit-zones (Qt.Edges bitmask: Top=1 Left=2 Right=4 Bottom=8) */
+  .resize-grip {
+    position: fixed;
+    z-index: 9999;
+    background: transparent;
+    touch-action: none;
+  }
+  .resize-grip.top    { top: 0;    left: 12px; right: 12px; height: 6px;  cursor: ns-resize; }
+  .resize-grip.bottom { bottom: 0; left: 12px; right: 12px; height: 6px;  cursor: ns-resize; }
+  /* Below title bar so min/max/close stay easy to hit (grips sit above shell via z-index) */
+  .resize-grip.left   { top: var(--title-h); bottom: 0; left: 0;   width: 6px;  cursor: ew-resize; }
+  .resize-grip.right  { top: var(--title-h); bottom: 0; right: 0; width: 6px;  cursor: ew-resize; }
+  .resize-grip.top-left     { top: 0;    left: 0;    width: 12px; height: 12px; cursor: nwse-resize; }
+  .resize-grip.top-right    { top: 0;    right: 0;   width: 12px; height: 12px; cursor: nesw-resize; }
+  .resize-grip.bottom-left  { bottom: 0; left: 0;    width: 12px; height: 12px; cursor: nesw-resize; }
+  .resize-grip.bottom-right { bottom: 0; right: 0;   width: 12px; height: 12px; cursor: nwse-resize; }
+
+  /* ============================== Shell ============================== */
+  .shell {
+    position: absolute; inset: var(--title-h) 0 0 0;
+    display: flex; flex-direction: column;
+    padding: 0 20px 20px;
+    overflow-y: auto; overflow-x: hidden;
+    scrollbar-gutter: stable;
+  }
+  .shell::-webkit-scrollbar { width: 10px; }
+  .shell::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+  .shell::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  /* ============================== Status banner ============================== */
+  .status {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; margin-bottom: 14px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    font-size: 13px;
+    transition: border-color .25s var(--ease);
+  }
+  .status .dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    background: var(--muted);
+    transition: background .2s, box-shadow .2s;
+  }
+  .status.playing .dot { background: var(--success); box-shadow: 0 0 0 4px rgba(52,211,153,.2); animation: pulse 1.4s ease-in-out infinite; }
+  .status.loading .dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .status.paused  .dot { background: var(--warning); }
+  .status.error   .dot { background: var(--danger); }
+  .status.done    .dot { background: var(--accent); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+  .status .text { flex: 1; font-weight: 500; }
+  .status .detail { color: var(--muted); font-size: 12px; }
+
+  /* ============================== No-voices banner ============================== */
+  .no-voices {
+    display: none;
+    padding: 14px 18px; margin-bottom: 14px;
+    background: linear-gradient(135deg,
+      color-mix(in oklab, var(--accent) 12%, transparent),
+      color-mix(in oklab, var(--accent2) 12%, transparent));
+    border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    color: var(--text);
+  }
+  .no-voices.visible { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .no-voices .cta { margin-left: auto; }
+
+  /* ============================== Cards ============================== */
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    box-shadow: var(--shadow-card);
+  }
+  .card + .card { margin-top: 14px; }
+  .card-pad { padding: 20px; }
+
+  /* ============================== Action chips ============================== */
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 14px; font-size: 13px; font-weight: 600;
+    color: var(--text-soft); background: var(--card);
+    border: 1px solid var(--border); border-radius: 999px;
+    backdrop-filter: blur(10px);
+    cursor: pointer; transition: all .18s var(--ease);
+  }
+  .chip:hover { color: var(--text); border-color: var(--border-strong); transform: translateY(-1px); }
+  .chip.active { background: color-mix(in oklab, var(--accent) 18%, var(--card)); color: var(--text); border-color: var(--accent); }
+  .chip-md { font-variant: small-caps; letter-spacing: .05em; }
+  .chip-md.auto { opacity: .85; }
+  .chip-md.off { opacity: .55; }
+  .chip-md.on { background: color-mix(in oklab, var(--accent) 22%, var(--card)); color: var(--text); border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent); }
+
+  /* ============================== Editor ============================== */
+  .editor-wrap { position: relative; }
+  textarea {
+    width: 100%; min-height: 220px; max-height: 420px; resize: vertical;
+    padding: 16px 18px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 15px; line-height: 1.65; outline: none;
+    font-family: inherit;
+    transition: border-color .2s, box-shadow .2s, background .2s;
+  }
+  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--ring); background: var(--bg2); }
+  textarea::placeholder { color: var(--muted); }
+
+  .render-panel {
+    display: none; margin-top: 12px;
+    padding: 14px 16px; max-height: 240px; overflow-y: auto;
+    background: var(--surface); border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    line-height: 1.75; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .render-panel.visible { display: block; }
+  .hl {
+    background: linear-gradient(135deg, var(--accent-soft), color-mix(in oklab, var(--accent2) 22%, transparent));
+    border-radius: 6px; padding: 2px 4px;
+  }
+
+  .progress-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .progress-track { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; position: relative; }
+  .progress-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 3px; transition: width .25s var(--ease);
+  }
+  .progress-fill.shimmer::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .stat {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border);
+    font-size: 12px; color: var(--muted);
+  }
+  .stat b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* ============================== Buttons ============================== */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 10px 18px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 600; font-family: inherit;
+    cursor: pointer; white-space: nowrap;
+    transition: transform .15s var(--spring), box-shadow .2s var(--ease),
+                background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
+  }
+  .btn:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--border-strong); background: var(--bg2); }
+  .btn:active:not(:disabled) { transform: translateY(0) scale(.98); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff; border-color: transparent;
+    box-shadow: 0 8px 24px -6px color-mix(in oklab, var(--accent) 70%, transparent);
+  }
+  .btn.primary:hover:not(:disabled) {
+    box-shadow: 0 12px 32px -6px color-mix(in oklab, var(--accent) 75%, transparent);
+  }
+  .btn.success { background: linear-gradient(135deg, #10b981, #059669); color: #fff; border-color: transparent; }
+  .btn.danger  { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; border-color: transparent; }
+  .btn.warning { background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; border-color: transparent; }
+  .btn.sm      { padding: 8px 14px; font-size: 12px; }
+  .btn.icon    { padding: 10px; border-radius: 10px; }
+  .btn svg     { width: 14px; height: 14px; }
+
+  /* ============================== Controls ============================== */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-bottom: 16px; }
+
+  .export-row {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center;
+    margin-bottom: 18px; padding: 14px 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .export-row .hint { color: var(--muted); font-size: 12px; font-style: italic; }
+
+  .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .setting {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .setting label {
+    font-size: 12px; font-weight: 500; color: var(--muted);
+    display: flex; align-items: center; justify-content: space-between;
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+  .setting .val { color: var(--accent); font-weight: 700; text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+
+  select, input[type="text"], input[type="number"] {
+    width: 100%; padding: 9px 12px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    font-size: 13px; outline: none; font-family: inherit;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  select:focus, input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+
+  input[type="range"] {
+    width: 100%; height: 5px; appearance: none; -webkit-appearance: none;
+    background: var(--border); border-radius: 3px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none; width: 18px; height: 18px;
+    background: var(--accent); border: 2px solid var(--card-solid); border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 4px 10px -2px color-mix(in oklab, var(--accent) 60%, transparent);
+    transition: transform .15s var(--spring);
+  }
+  input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+
+  .preset-row { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .preset { padding: 4px 10px; font-size: 11px; }
+
+  .check-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .check {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 8px 14px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 999px;
+    cursor: pointer; font-size: 12px; color: var(--text-soft);
+    transition: all .15s var(--ease);
+  }
+  .check:hover { border-color: var(--border-strong); color: var(--text); }
+  .check input { appearance: none; -webkit-appearance: none;
+    width: 16px; height: 16px; border: 1.5px solid var(--border-strong);
+    border-radius: 4px; background: var(--bg2);
+    position: relative; cursor: pointer; flex-shrink: 0;
+    transition: all .15s var(--ease);
+  }
+  .check input:checked { background: var(--accent); border-color: var(--accent); }
+  .check input:checked::after {
+    content: ''; position: absolute; left: 4px; top: 1px;
+    width: 4px; height: 9px; border: solid #fff;
+    border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+
+  /* ============================== Drawers ============================== */
+  .drawer {
+    position: fixed; top: var(--title-h); right: 0; bottom: 0; width: 420px; max-width: 90vw;
+    background: var(--card); border-left: 1px solid var(--border);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    box-shadow: -20px 0 60px rgba(0,0,0,.25);
+    transform: translateX(calc(100% + 20px));
+    transition: transform .35s var(--spring);
+    display: flex; flex-direction: column;
+    z-index: 40;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer.wide { width: 640px; }
+  .drawer .drawer-head {
+    padding: 18px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .drawer .drawer-head h2 { font-size: 16px; font-weight: 700; }
+  .drawer .drawer-head .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .drawer .drawer-body { padding: 18px 20px; flex: 1; overflow-y: auto; }
+  .drawer .drawer-body::-webkit-scrollbar { width: 8px; }
+  .drawer .drawer-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+
+  /* ============================== Import drawer ============================== */
+  .drop-zone {
+    border: 2px dashed var(--border-strong); border-radius: var(--radius);
+    padding: 28px 20px; text-align: center; color: var(--muted);
+    cursor: pointer; transition: all .2s var(--ease);
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--accent); background: var(--accent-soft); color: var(--text);
+  }
+  .drop-zone svg { width: 40px; height: 40px; color: var(--accent); margin-bottom: 8px; }
+
+  .recent-list { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; }
+  .recent-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px;
+    font-size: 12px; cursor: pointer;
+    transition: all .15s var(--ease);
+  }
+  .recent-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .recent-item .name { font-weight: 600; color: var(--text); }
+  .recent-item .path { color: var(--muted); font-size: 11px; }
+
+  /* ============================== Bookmarks ============================== */
+  .bookmark {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; margin-bottom: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; font-size: 13px;
+    cursor: pointer; transition: all .15s var(--ease);
+  }
+  .bookmark:hover { border-color: var(--accent); }
+  .bookmark .preview { flex: 1; color: var(--text-soft); }
+  .bookmark .del { color: var(--danger); opacity: .6; padding: 0 6px; cursor: pointer; }
+  .bookmark .del:hover { opacity: 1; }
+
+  /* ============================== Debug ============================== */
+  .debug-log {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px; max-height: calc(100vh - 240px); overflow-y: auto;
+    font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    font-size: 11.5px; line-height: 1.55; color: var(--text-soft);
+  }
+  .debug-log .log-line { white-space: pre-wrap; word-break: break-word; }
+  .debug-log .log-time { color: var(--accent); margin-right: 8px; }
+  .debug-log .log-level-warn  { color: var(--warning); }
+  .debug-log .log-level-error { color: var(--danger); }
+
+  /* ============================== Voice catalog ============================== */
+  .catalog-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .catalog-search { margin-bottom: 12px; }
+  .catalog-list { display: flex; flex-direction: column; gap: 10px; }
+  .voice-card {
+    padding: 14px 16px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: all .2s var(--ease);
+  }
+  .voice-card:hover { border-color: var(--border-strong); }
+  .voice-card.installed { border-color: color-mix(in oklab, var(--success) 45%, var(--border)); }
+  .voice-card .row1 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .voice-card .name { font-weight: 700; font-size: 14px; }
+  .voice-card .lang { font-size: 11px; color: var(--muted); font-variant: tabular-nums; }
+  .voice-card .badges { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .badge {
+    padding: 2px 8px; font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    border-radius: 999px; background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); text-transform: uppercase;
+  }
+  .badge.ok { color: var(--success); border-color: color-mix(in oklab, var(--success) 35%, transparent); }
+  .voice-card .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .voice-card .dl-progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .voice-card .dl-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0; transition: width .3s var(--ease); }
+
+  /* ============================== Export overlay ============================== */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 1000; padding: 20px;
+    backdrop-filter: blur(8px);
+  }
+  .overlay.visible { display: flex; }
+  .modal {
+    background: var(--card-solid); border: 1px solid var(--border-strong);
+    border-radius: var(--radius); padding: 28px 32px;
+    max-width: 460px; width: 100%;
+    box-shadow: 0 30px 80px rgba(0,0,0,.45);
+  }
+  .modal h3 { font-size: 18px; margin-bottom: 6px; }
+  .modal .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .modal .modal-center { text-align: center; }
+  .spinner {
+    display: inline-block; width: 44px; height: 44px;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; margin-bottom: 14px;
+    animation: spin 0.85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .indeterminate {
+    height: 4px; background: var(--border); border-radius: 2px;
+    overflow: hidden; margin: 14px 0; position: relative;
+  }
+  .indeterminate::before {
+    content: ''; position: absolute; inset: 0 auto 0 -40%;
+    width: 40%; background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: indet 1.4s ease-in-out infinite;
+  }
+  @keyframes indet { 0% { left: -40%; } 100% { left: 100%; } }
+  .modal .timing { color: var(--muted); font-size: 12px; margin-top: 8px; font-family: ui-monospace, Consolas, monospace; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+  /* ============================== About dialog ============================== */
+  .about-head { text-align: center; margin-bottom: 14px; }
+  .about-head svg { width: 64px; height: 64px; color: var(--accent); margin-bottom: 8px; }
+  .about-head h2 {
+    font-size: 22px; font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; color: transparent;
+  }
+  .about-head .tm { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .about-body { color: var(--text-soft); font-size: 13px; line-height: 1.6; }
+  .about-body p { margin-bottom: 10px; }
+  .about-body a { color: var(--accent); text-decoration: none; }
+  .about-body a:hover { text-decoration: underline; }
+
+  /* ============================== Wizard ============================== */
+  .wizard .steps { display: flex; gap: 8px; margin-bottom: 20px; }
+  .wizard .step-dot { flex: 1; height: 3px; background: var(--border); border-radius: 2px; }
+  .wizard .step-dot.active { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .wizard .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 16px 0; }
+  .wizard .choice {
+    padding: 16px; text-align: center; cursor: pointer;
+    background: var(--surface); border: 2px solid var(--border); border-radius: 12px;
+    font-weight: 600; transition: all .18s var(--ease);
+  }
+  .wizard .choice:hover { border-color: var(--border-strong); }
+  .wizard .choice.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .wizard .voice-pick {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; margin-bottom: 6px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    font-size: 13px;
+  }
+  .wizard .voice-pick input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+  .wizard .voice-pick .sz { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+  /* ============================== Footer ============================== */
+  footer {
+    margin-top: auto; padding-top: 20px; text-align: center;
+    font-size: 11px; color: var(--muted);
+  }
+  kbd {
+    display: inline-block; padding: 2px 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; font-family: inherit; font-size: 10.5px; font-weight: 600;
+  }
+  .shortcuts { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-bottom: 10px; }
+
+  /* ============================== Toast ============================== */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    padding: 10px 18px; max-width: 90vw;
+    background: var(--card-solid); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 16px 50px rgba(0,0,0,.4);
+    font-size: 13px; opacity: 0; z-index: 2000;
+    transition: all .3s var(--spring);
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast.error   { border-color: color-mix(in oklab, var(--danger) 50%, transparent); }
+  .toast.success { border-color: color-mix(in oklab, var(--success) 50%, transparent); }
+
+  /* ============================== Find bar ============================== */
+  .findbar {
+    display: none; align-items: center; gap: 8px;
+    padding: 8px 12px; margin-bottom: 12px;
+    background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
+    backdrop-filter: blur(16px);
+  }
+  .findbar.visible { display: flex; }
+  .findbar input { flex: 1; padding: 6px 10px; }
+  .findbar .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  /* ============================== Responsive ============================== */
+  @media (max-width: 720px) {
+    .shell { padding: 0 12px 12px; }
+    .drawer { width: 100vw; max-width: none; }
+    .controls .btn { flex: 1 1 calc(50% - 5px); }
+    .card-pad { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Native resize edges (data-edges = Qt.Edges bitmask for startSystemResize) -->
+<div class="resize-grip top" data-edges="1" aria-hidden="true"></div>
+<div class="resize-grip bottom" data-edges="8" aria-hidden="true"></div>
+<div class="resize-grip left" data-edges="2" aria-hidden="true"></div>
+<div class="resize-grip right" data-edges="4" aria-hidden="true"></div>
+<div class="resize-grip top-left" data-edges="3" aria-hidden="true"></div>
+<div class="resize-grip top-right" data-edges="5" aria-hidden="true"></div>
+<div class="resize-grip bottom-left" data-edges="10" aria-hidden="true"></div>
+<div class="resize-grip bottom-right" data-edges="12" aria-hidden="true"></div>
+
+<!-- ============================== Title bar ============================== -->
+<div class="title-bar">
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 10v4M7 7v10M11 4v16M15 8v8M19 11v2" />
+    </svg>
+    <span data-i18n="app.name">TextSpeak Pro</span>
+    <span class="tm" data-i18n="app.tm">TextSpeak Pro&trade; by JojoLapin Inc.</span>
+  </div>
+  <div class="drag" id="titleDrag"></div>
+  <button class="win-btn" id="winMinimize" data-i18n-title="tb.minimize">
+    <svg viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2"/></svg>
+  </button>
+  <button class="win-btn" id="winMaximize" data-i18n-title="tb.maximize">
+    <svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+  </button>
+  <button class="win-btn close" id="winClose" data-i18n-title="tb.close">
+    <svg viewBox="0 0 12 12">
+      <line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.2"/>
+    </svg>
+  </button>
+</div>
+
+<!-- ============================== Shell ============================== -->
+<div class="shell">
+
+  <!-- Action chips -->
+  <div class="chips">
+    <button class="chip" id="chipImport"><span>&#128229;</span> <span data-i18n="hdr.import">Import</span></button>
+    <button class="chip" id="chipBookmarks"><span>&#128278;</span> <span data-i18n="hdr.bookmarks">Bookmarks</span></button>
+    <button class="chip" id="chipDebug"><span>&#128030;</span> <span data-i18n="hdr.debug">Debug</span></button>
+    <button class="chip" id="chipVoices"><span>&#127908;</span> <span data-i18n="hdr.voices">Voices</span></button>
+    <button class="chip chip-md" id="chipMarkdown" style="margin-left:auto" hidden title="Markdown-aware reading"><span>&#128196;</span> <span data-i18n="hdr.md">MD</span></button>
+    <button class="chip" id="chipSettings"><span>&#9881;&#65039;</span> <span data-i18n="hdr.settings">Settings</span></button>
+  </div>
+
+  <!-- Status banner -->
+  <div class="status" id="status">
+    <div class="dot"></div>
+    <div class="text" id="statusText" data-i18n="status.ready">Ready</div>
+    <div class="detail" id="statusDetail"></div>
+  </div>
+
+  <!-- No voices banner -->
+  <div class="no-voices" id="noVoices">
+    <div>
+      <div style="font-weight:700"><span data-i18n="nv.title">No voices installed</span></div>
+      <div style="color:var(--muted);font-size:12px" data-i18n="nv.body">Open the Voices panel...</div>
+    </div>
+    <button class="btn primary sm cta" id="openCatalogFromBanner" data-i18n="nv.cta">Open Voice Catalog</button>
+  </div>
+
+  <!-- Find bar -->
+  <div class="findbar" id="findBar">
+    <input id="findInput" type="text" data-i18n="find.placeholder" data-i18n-attr="placeholder" />
+    <span class="count" id="findCount"></span>
+    <button class="btn sm" id="findPrev">&uarr;</button>
+    <button class="btn sm" id="findNext">&darr;</button>
+    <button class="btn sm" id="findClose">&times;</button>
+  </div>
+
+  <!-- Editor card -->
+  <div class="card card-pad">
+    <div class="editor-wrap">
+      <textarea id="input" data-i18n="editor.placeholder" data-i18n-attr="placeholder"></textarea>
+    </div>
+    <div id="render" class="render-panel"></div>
+
+    <div class="progress-row">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat">&#128221; <b id="wordCount">0</b> <span data-i18n="stats.words">words</span></div>
+      <div class="stat">&#128202; <b id="charCount">0</b> <span data-i18n="stats.chars">chars</span></div>
+      <div class="stat">&#9201;&#65039; <b id="readTime">0</b> <span data-i18n="stats.readtime">min read</span></div>
+      <div class="stat">&#129513; <b id="chunkProgress">0 / 0</b> <span data-i18n="stats.chunks">chunks</span></div>
+    </div>
+  </div>
+
+  <!-- Controls card -->
+  <div class="card card-pad">
+    <div class="controls">
+      <button class="btn primary" id="playBtn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span data-i18n="btn.play">Play</span></button>
+      <button class="btn" id="playFromCursor" data-i18n-title="title.fromCursor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4V8z"/></svg><span data-i18n="btn.fromCursor">From Cursor</span></button>
+      <button class="btn" id="pauseBtn" disabled><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg><span data-i18n="btn.pause">Pause</span></button>
+      <button class="btn success" id="resumeBtn" disabled><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span data-i18n="btn.resume">Resume</span></button>
+      <button class="btn danger" id="stopBtn" disabled><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg><span data-i18n="btn.stop">Stop</span></button>
+      <button class="btn warning" id="restartBtn" data-i18n-title="title.restart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg><span data-i18n="btn.restart">Restart</span></button>
+      <button class="btn" id="skipBack" disabled data-i18n-title="title.skipBack"><span>&laquo;</span> <span data-i18n="btn.skipBack">-10s</span></button>
+      <button class="btn" id="skipForward" disabled data-i18n-title="title.skipForward"><span data-i18n="btn.skipForward">+10s</span> <span>&raquo;</span></button>
+    </div>
+
+    <div class="export-row">
+      <button class="btn" id="downloadAudioBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span data-i18n="exp.download">Export audio</span></button>
+      <button class="btn" id="batchExportBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span data-i18n="exp.batch">Batch export</span></button>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px">
+        <span data-i18n="exp.format">Format</span>
+        <select id="exportFormat" style="width:auto">
+          <option value="mp3">MP3</option>
+          <option value="wav">WAV</option>
+          <option value="ogg">OGG</option>
+        </select>
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px">
+        <span data-i18n="exp.bitrate">Bitrate</span>
+        <select id="exportBitrate" style="width:auto">
+          <option value="64">64 kbps</option>
+          <option value="128" selected>128 kbps</option>
+          <option value="192">192 kbps</option>
+          <option value="256">256 kbps</option>
+        </select>
+      </label>
+      <span class="hint" data-i18n="exp.hint">Saves the entire text as an audio file.</span>
+    </div>
+
+    <div class="settings-grid">
+      <div class="setting">
+        <label><span data-i18n="set.voice">Voice</span></label>
+        <select id="voiceSelect"><option data-i18n="set.voice.loading">Loading voices...</option></select>
+      </div>
+      <div class="setting">
+        <label><span data-i18n="set.speed">Speed</span> <span class="val" id="rateValue">1.00&times;</span></label>
+        <input type="range" id="rateSlider" min="0.5" max="2" step="0.05" value="1">
+        <div class="preset-row">
+          <button class="btn sm preset" data-speed="0.75">0.75&times;</button>
+          <button class="btn sm preset" data-speed="1">1&times;</button>
+          <button class="btn sm preset" data-speed="1.25">1.25&times;</button>
+          <button class="btn sm preset" data-speed="1.5">1.5&times;</button>
+          <button class="btn sm preset" data-speed="2">2&times;</button>
+        </div>
+      </div>
+      <div class="setting">
+        <label><span data-i18n="set.volume">Volume</span> <span class="val" id="volumeValue">100%</span></label>
+        <input type="range" id="volumeSlider" min="0" max="1" step="0.01" value="1">
+      </div>
+    </div>
+
+    <div class="check-row">
+      <label class="check"><input type="checkbox" id="hlToggle"> <span data-i18n="set.cb.highlight">Show progress highlighting</span></label>
+      <label class="check"><input type="checkbox" id="autoScroll" checked> <span data-i18n="set.cb.autoscroll">Auto-scroll while reading</span></label>
+      <label class="check"><input type="checkbox" id="saveProgress"> <span data-i18n="set.cb.remember">Remember text &amp; position</span></label>
+    </div>
+  </div>
+
+  <footer>
+    <div class="shortcuts">
+      <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> <span data-i18n="kb.play">Play</span></span>
+      <span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> <span data-i18n="kb.fromCursor">From cursor</span></span>
+      <span><kbd>Space</kbd> <span data-i18n="kb.pauseResume">Pause / Resume</span></span>
+      <span><kbd>Esc</kbd> <span data-i18n="kb.stop">Stop</span></span>
+      <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> <span data-i18n="kb.skip">Skip</span></span>
+      <span><kbd>Ctrl</kbd>+<kbd>F</kbd> <span data-i18n="kb.find">Find</span></span>
+    </div>
+    <div><span data-i18n="app.tm">TextSpeak Pro&trade; by JojoLapin Inc.</span> &middot; <span data-i18n="app.copyright">&copy; 2026 JojoLapin Inc.</span></div>
+  </footer>
+</div>
+
+<!-- ============================== Drawers ============================== -->
+
+<!-- Import -->
+<aside class="drawer" id="drawerImport">
+  <div class="drawer-head">
+    <div>
+      <h2 data-i18n="imp.title">Import text</h2>
+      <div class="sub" data-i18n="imp.drop.types">.txt, .md, .html, .pdf, .json</div>
+    </div>
+    <button class="btn icon" data-drawer-close>&times;</button>
+  </div>
+  <div class="drawer-body">
+    <div class="drop-zone" id="dropZone">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+      <div data-i18n="imp.drop">Drop a file here or click to browse</div>
+      <small style="color:var(--muted)" data-i18n="imp.drop.types">.txt, .md, .html, .pdf, .json</small>
+      <input type="file" id="fileInput" accept=".txt,.md,.html,.htm,.json,.csv,.pdf" hidden>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+      <input id="urlInput" type="text" data-i18n="imp.url.placeholder" data-i18n-attr="placeholder">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn sm" id="fetchUrl"><span>&#127760;</span> <span data-i18n="imp.fetch">Fetch from URL</span></button>
+        <button class="btn sm" id="pasteClipboard"><span>&#128203;</span> <span data-i18n="imp.paste">Paste from clipboard</span></button>
+        <button class="btn sm danger" id="clearText"><span>&#128465;&#65039;</span> <span data-i18n="imp.clear">Clear all</span></button>
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px" data-i18n="imp.recent">Recent files</div>
+      <div class="recent-list" id="recentList"></div>
+    </div>
+  </div>
+</aside>
+
+<!-- Bookmarks -->
+<aside class="drawer" id="drawerBookmarks">
+  <div class="drawer-head">
+    <div><h2 data-i18n="bm.title">Bookmarks</h2></div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn success sm" id="addBookmark"><span>+</span> <span data-i18n="bm.add">Add bookmark</span></button>
+      <button class="btn icon" data-drawer-close>&times;</button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div id="bookmarkList"></div>
+  </div>
+</aside>
+
+<!-- Debug -->
+<aside class="drawer wide" id="drawerDebug">
+  <div class="drawer-head">
+    <div><h2 data-i18n="dbg.title">Engine log</h2></div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn sm" id="clearLog" data-i18n="dbg.clear">Clear</button>
+      <button class="btn sm" id="copyLog" data-i18n="dbg.copy">Copy</button>
+      <button class="btn icon" data-drawer-close>&times;</button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div class="debug-log" id="debugLog"></div>
+  </div>
+</aside>
+
+<!-- Voices -->
+<aside class="drawer wide" id="drawerVoices">
+  <div class="drawer-head">
+    <div>
+      <h2 data-i18n="vc.title">Voice catalog</h2>
+      <div class="sub" data-i18n="vc.subtitle">Download free neural voices for any language.</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn sm" id="catalogRefresh" data-i18n="vc.refresh">Refresh catalog</button>
+      <button class="btn icon" data-drawer-close>&times;</button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <input class="catalog-search" id="catalogSearch" type="text" data-i18n="vc.search.placeholder" data-i18n-attr="placeholder">
+    <div class="catalog-filters">
+      <select id="catalogLangFilter"></select>
+      <select id="catalogQualityFilter">
+        <option value="" data-i18n="vc.filter.quality">Any quality</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+        <option value="x_low">X-Low</option>
+      </select>
+    </div>
+    <div class="catalog-list" id="catalogList"></div>
+  </div>
+</aside>
+
+<!-- Settings -->
+<aside class="drawer" id="drawerSettings">
+  <div class="drawer-head">
+    <div><h2 data-i18n="settings.title">Settings</h2></div>
+    <button class="btn icon" data-drawer-close>&times;</button>
+  </div>
+  <div class="drawer-body">
+    <div class="setting" style="margin-bottom:16px">
+      <label><span data-i18n="settings.theme">Theme</span></label>
+      <select id="themeSelect">
+        <option value="system" data-i18n="settings.theme.system">Follow system</option>
+        <option value="light" data-i18n="settings.theme.light">Light</option>
+        <option value="dark" data-i18n="settings.theme.dark">Dark</option>
+      </select>
+    </div>
+
+    <div class="setting" style="margin-bottom:16px">
+      <label><span data-i18n="settings.language">Language</span></label>
+      <select id="langSelect">
+        <option value="system" data-i18n="settings.lang.system">Follow system</option>
+        <option value="en" data-i18n="settings.lang.en">English</option>
+        <option value="fr" data-i18n="settings.lang.fr">Fran&ccedil;ais</option>
+      </select>
+    </div>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.export">Export defaults</div>
+    <div class="settings-grid">
+      <div class="setting">
+        <label><span data-i18n="settings.export.format">Format</span></label>
+        <select id="defExportFormat">
+          <option value="mp3">MP3</option>
+          <option value="wav">WAV</option>
+          <option value="ogg">OGG</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label><span data-i18n="settings.export.bitrate">MP3 bitrate</span></label>
+        <select id="defExportBitrate">
+          <option value="64">64 kbps</option>
+          <option value="128">128 kbps</option>
+          <option value="192">192 kbps</option>
+          <option value="256">256 kbps</option>
+        </select>
+      </div>
+      <div class="setting" style="grid-column: span 2">
+        <label><span data-i18n="settings.export.author">Author (ID3 tag)</span></label>
+        <input id="id3Author" type="text" data-i18n="settings.export.authorPlaceholder" data-i18n-attr="placeholder">
+      </div>
+    </div>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.md">Markdown reading</div>
+    <div class="setting" style="margin-bottom:8px">
+      <label><span data-i18n="settings.md.mode">Markdown handling</span></label>
+      <select id="mdMode">
+        <option value="auto" data-i18n="settings.md.mode.auto">Auto (detect .md files)</option>
+        <option value="on" data-i18n="settings.md.mode.on">Always on</option>
+        <option value="off" data-i18n="settings.md.mode.off">Off (read raw markdown)</option>
+      </select>
+    </div>
+    <label class="check"><input type="checkbox" id="mdReadTables"> <span data-i18n="settings.md.readTables">Read table rows</span></label>
+    <label class="check"><input type="checkbox" id="mdReadCode"> <span data-i18n="settings.md.readCode">Read code block contents aloud</span></label>
+    <label class="check"><input type="checkbox" id="mdReadUrls"> <span data-i18n="settings.md.readUrls">Read URLs inside links</span></label>
+    <div style="color:var(--muted);font-size:12px;margin-top:6px" data-i18n="settings.md.hint">Markdown hint</div>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.presets">Presets</div>
+    <div id="presetList"></div>
+    <button class="btn sm" id="savePresetBtn" style="margin-top:10px" data-i18n="settings.preset.save">Save current as preset</button>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.portable">Portable mode</div>
+    <label class="check" style="max-width:fit-content"><input type="checkbox" id="portableToggle"> <span data-i18n="settings.portable">Portable mode</span></label>
+    <div style="color:var(--muted);font-size:12px;margin-top:6px" data-i18n="settings.portable.hint">Portable mode hint</div>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.locations">Locations</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      <button class="btn sm" id="openVoicesFolder" data-i18n="settings.openVoices">Open voices folder</button>
+      <button class="btn sm" id="openLogsFolder" data-i18n="settings.openLogs">Open logs folder</button>
+      <button class="btn sm" id="openDataFolder" data-i18n="settings.openData">Open data folder</button>
+    </div>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.about">About</div>
+    <div style="color:var(--muted);font-size:12px" id="settingsVersion"></div>
+    <button class="btn sm" style="margin-top:8px" id="aboutBtn" data-i18n="settings.about.btn">About TextSpeak Pro</button>
+  </div>
+</aside>
+
+<!-- ============================== Export overlay ============================== -->
+<div class="overlay" id="exportOverlay">
+  <div class="modal modal-center">
+    <div class="spinner"></div>
+    <h3 id="exportTitle" data-i18n="export.title">Generating audio...</h3>
+    <div class="sub" id="exportSubtitle"></div>
+    <div class="indeterminate"></div>
+    <div class="timing"><span data-i18n="export.elapsed">elapsed</span> <span id="exportElapsed">0s</span> &middot; <span data-i18n="export.eta">estimated total</span> <span id="exportEta">~?</span></div>
+    <div class="actions"><button class="btn sm danger" id="exportCancel" data-i18n="export.cancel">Cancel</button></div>
+  </div>
+</div>
+
+<!-- ============================== About dialog ============================== -->
+<div class="overlay" id="aboutOverlay">
+  <div class="modal">
+    <div class="about-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 10v4M7 7v10M11 4v16M15 8v8M19 11v2"/>
+      </svg>
+      <h2 data-i18n="app.name">TextSpeak Pro</h2>
+      <div class="tm" data-i18n="app.tm">TextSpeak Pro&trade; by JojoLapin Inc.</div>
+      <div class="tm" id="aboutVersion"></div>
+      <div class="tm" data-i18n="app.copyright">&copy; 2026 JojoLapin Inc.</div>
+    </div>
+    <div class="about-body">
+      <p data-i18n="about.desc">100% offline neural text-to-speech.</p>
+      <p data-i18n="about.credits" data-i18n-attr="html">Credits</p>
+    </div>
+    <div class="actions"><button class="btn primary sm" id="aboutClose" data-i18n="about.close">Close</button></div>
+  </div>
+</div>
+
+<!-- ============================== Wizard ============================== -->
+<div class="overlay wizard" id="wizardOverlay">
+  <div class="modal" style="max-width:560px">
+    <div class="steps">
+      <div class="step-dot active" data-step="0"></div>
+      <div class="step-dot" data-step="1"></div>
+      <div class="step-dot" data-step="2"></div>
+    </div>
+    <!-- Step 0 -->
+    <div class="wiz-step" data-step="0">
+      <h3 data-i18n="wiz.welcome">Welcome to TextSpeak Pro</h3>
+      <div class="sub" data-i18n="wiz.welcome.body">Let's get you set up with one or two voices.</div>
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px" data-i18n="wiz.step.lang">Language</div>
+      <div class="choices" id="wizLangChoices">
+        <div class="choice" data-value="system" data-i18n="settings.lang.system">Follow system</div>
+        <div class="choice" data-value="en" data-i18n="settings.lang.en">English</div>
+        <div class="choice" data-value="fr" data-i18n="settings.lang.fr">Fran&ccedil;ais</div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px" data-i18n="wiz.step.theme">Theme</div>
+      <div class="choices" id="wizThemeChoices">
+        <div class="choice" data-value="system" data-i18n="settings.theme.system">Follow system</div>
+        <div class="choice" data-value="light" data-i18n="settings.theme.light">Light</div>
+        <div class="choice" data-value="dark" data-i18n="settings.theme.dark">Dark</div>
+      </div>
+      <div class="actions">
+        <button class="btn sm" id="wizSkip" data-i18n="wiz.skip">Skip</button>
+        <button class="btn primary sm" id="wizNext1" data-i18n="wiz.next">Next</button>
+      </div>
+    </div>
+    <!-- Step 1: voices -->
+    <div class="wiz-step" data-step="1" style="display:none">
+      <h3 data-i18n="wiz.step.voices">Voices</h3>
+      <div class="sub" data-i18n="wiz.voices.body">Pick the voices you want to download now.</div>
+      <div id="wizVoicePicks" style="margin-top:10px;max-height:280px;overflow-y:auto"></div>
+      <div id="wizTotal" style="color:var(--muted);font-size:12px;margin-top:8px"></div>
+      <div class="actions">
+        <button class="btn sm" id="wizBack1" data-i18n="wiz.back">Back</button>
+        <button class="btn primary sm" id="wizDownload" data-i18n="wiz.done">Start reading</button>
+      </div>
+    </div>
+    <!-- Step 2: downloading -->
+    <div class="wiz-step" data-step="2" style="display:none">
+      <h3 id="wizDlTitle">&hellip;</h3>
+      <div class="indeterminate"></div>
+      <div class="sub" id="wizDlSub"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== Preset save dialog ============================== -->
+<div class="overlay" id="presetOverlay">
+  <div class="modal">
+    <h3 data-i18n="settings.preset.save">Save current as preset</h3>
+    <div style="margin-top:12px">
+      <input id="presetName" type="text" data-i18n="settings.preset.savePrompt" data-i18n-attr="placeholder">
+    </div>
+    <div class="actions">
+      <button class="btn sm" id="presetCancel" data-i18n="wiz.back">Cancel</button>
+      <button class="btn primary sm" id="presetOk" data-i18n="wiz.next">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== Toast ============================== -->
+<div class="toast" id="toast"></div>
+
+<script src="i18n.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>

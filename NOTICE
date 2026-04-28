@@ -1,0 +1,63 @@
+TextSpeak Pro - third-party software notices and attributions
+=============================================================
+(C) 2026 JojoLapin Inc. All rights reserved.
+"TextSpeak Pro" and the TextSpeak Pro logo are trademarks of JojoLapin Inc.
+
+This product includes or depends on the following third-party components.
+Their copyrights and license terms are retained by their respective owners.
+
+---------------------------------------------------------------------------
+1. Piper TTS  (https://github.com/OHF-Voice/piper1-gpl)
+---------------------------------------------------------------------------
+   License: GNU General Public License v3.0 (GPL-3.0)
+   Copyright (C) Michael Hansen and the OHF-Voice / Piper community.
+
+   Piper TTS is the neural text-to-speech engine that powers the
+   synthesis in TextSpeak Pro. Voice models are published by the Piper
+   community on HuggingFace (rhasspy/piper-voices) under their own
+   licenses (typically CC-BY-4.0 or CC0).
+
+   When redistributing TextSpeak Pro together with Piper TTS as a single
+   bundled binary, the resulting work is subject to the terms of the
+   GNU GPL-3.0. A copy is available at:
+   https://www.gnu.org/licenses/gpl-3.0.en.html
+
+---------------------------------------------------------------------------
+2. PySide6 / Qt for Python  (https://www.qt.io/qt-for-python)
+---------------------------------------------------------------------------
+   License: GNU Lesser General Public License v3.0 (LGPL-3.0)
+   Copyright (C) The Qt Company Ltd.
+
+---------------------------------------------------------------------------
+3. Mutagen  (https://mutagen.readthedocs.io/)
+---------------------------------------------------------------------------
+   License: GNU General Public License v2.0 or later (GPL-2.0-or-later)
+   Copyright (C) Mutagen contributors.
+
+---------------------------------------------------------------------------
+4. lameenc  (https://github.com/chrisstaite/lameenc)
+---------------------------------------------------------------------------
+   License: LGPL-3.0
+   Wraps libmp3lame (LGPL-2.0).
+
+---------------------------------------------------------------------------
+5. pypdf  (https://github.com/py-pdf/pypdf)
+---------------------------------------------------------------------------
+   License: BSD-3-Clause
+   Copyright (C) Mathieu Fenniak, Ashish Kulkarni, Martin Thoma and pypdf contributors.
+
+---------------------------------------------------------------------------
+6. requests  (https://requests.readthedocs.io/)
+---------------------------------------------------------------------------
+   License: Apache License 2.0
+   Copyright (C) Kenneth Reitz and the Requests contributors.
+
+---------------------------------------------------------------------------
+7. Inter typeface  (https://rsms.me/inter/)
+---------------------------------------------------------------------------
+   License: SIL Open Font License 1.1
+   Copyright (C) 2016-2024 Rasmus Andersson.
+   Used only when locally installed; not redistributed with TextSpeak Pro.
+
+---------------------------------------------------------------------------
+End of NOTICE.

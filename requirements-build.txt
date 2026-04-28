@@ -1,0 +1,11 @@
+# TextSpeak Pro - build-time dependencies
+# Install alongside requirements.txt when you want to bake an .exe:
+#   pip install -r requirements.txt -r requirements-build.txt
+#
+# (C) 2026 JojoLapin Inc.
+
+# Packager that turns main.py + assets into a single-file .exe
+PyInstaller>=6.0.0
+
+# Used by build_icon.py to draw the .ico at 16/32/48/256 px
+Pillow>=10.0.0
