@@ -4,7 +4,8 @@ The window itself is frameless and translucent so Mica can show through on
 Windows 11. The title bar, menus, and all UI chrome are rendered *inside*
 the webview (HTML/CSS). The Python side only provides:
 
-- frameless window resize + drag (via the title bar events from JS)
+- frameless window resize + drag (via JS); on Windows, ``WS_THICKFRAME``
+  is restored at show time so Win+Arrow / drag-to-edge participate in DWM snap
 - system tray (native)
 - single-instance lock
 - DnD files onto the window
@@ -72,12 +73,21 @@ class MainWindow(QMainWindow):
         # nasty per-frame flicker while moving/resizing. We only flip on
         # translucency AFTER apply_mica() confirms the backdrop took effect
         # (see showEvent). On other platforms we stay fully opaque.
-        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-        self.setMinimumSize(QSize(900, 640))
+        # System menu + min/max hints keep Win32 caption affordances for DWM;
+        # chrome stays custom inside the webview. Min width <= ~500 epx is required
+        # for Win11 snap zones on typical layouts (see MS snap-layout guidance).
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinMaxButtonsHint
+        )
+        self.setMinimumSize(QSize(500, 480))
         self.resize(1200, 820)
         self.setAcceptDrops(True)
         self._mica_applied: bool = False
         self._mica_attempted: bool = False
+        self._win_snap_style_applied: bool = False
 
         # Web view
         self.view = QWebEngineView(self)
@@ -184,6 +194,14 @@ class MainWindow(QMainWindow):
     def showEvent(self, ev: QEvent) -> None:  # noqa: N802
         super().showEvent(ev)
         self._apply_mica_once()
+        if sys.platform.startswith("win") and not self._win_snap_style_applied:
+            self._win_snap_style_applied = True
+            try:
+                from . import win_frameless as wf
+
+                wf.apply_snap_friendly_window_style(int(self.winId()))
+            except Exception:  # noqa: BLE001
+                log.debug("Windows snap-friendly style failed", exc_info=True)
 
     def changeEvent(self, ev: QEvent) -> None:  # noqa: N802
         super().changeEvent(ev)
@@ -191,6 +209,24 @@ class MainWindow(QMainWindow):
         # attribute is sticky across minimize/maximize on Win11 22H2+, and
         # calling DwmSetWindowAttribute repeatedly during state transitions
         # was the second source of the "trembling" the user reported.
+
+        # Defensive: if Qt re-applied its FramelessWindowHint style after a
+        # state change and stripped WS_THICKFRAME, put it back. We log when
+        # this fires so we can tell whether Qt is fighting us.
+        # ``changeEvent`` can fire from inside ``__init__`` (e.g. setWindowTitle
+        # raises WindowTitleChange before our attributes exist) so guard with
+        # getattr instead of assuming the attribute is set.
+        if sys.platform.startswith("win") and getattr(self, "_win_snap_style_applied", False):
+            if ev.type() in (
+                QEvent.Type.WindowStateChange,
+                QEvent.Type.ActivationChange,
+            ):
+                try:
+                    from . import win_frameless as wf
+
+                    wf.reapply_snap_style_if_lost(int(self.winId()))
+                except Exception:  # noqa: BLE001
+                    log.debug("reapply_snap_style_if_lost failed", exc_info=True)
 
     def closeEvent(self, ev: QEvent) -> None:  # noqa: N802
         self.settings.save_window_geometry(bytes(self.saveGeometry()), bytes(self.saveState()))
