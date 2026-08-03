@@ -30,6 +30,12 @@
       'hdr.md.title.off': 'Markdown-aware reading is OFF. Click to turn on.',
       'hdr.md.title.auto': 'Markdown-aware reading is AUTO (detected: {state}). Click to switch.',
 
+      // Document tabs
+      'tabs.new': 'New tab',
+      'tabs.all': 'All tabs',
+      'tabs.close': 'Close tab',
+      'tabs.untitled': 'Untitled',
+
       // Status banner states
       'status.ready': 'Ready \u2014 paste or type text, then press Play.',
       'status.playing': 'Playing',
@@ -266,6 +272,12 @@
       'hdr.md.title.on': 'Lecture markdown activ\u00e9e. Cliquer pour d\u00e9sactiver.',
       'hdr.md.title.off': 'Lecture markdown d\u00e9sactiv\u00e9e. Cliquer pour activer.',
       'hdr.md.title.auto': 'Lecture markdown AUTO (d\u00e9tect\u00e9 : {state}). Cliquer pour changer.',
+
+      // Onglets de documents
+      'tabs.new': 'Nouvel onglet',
+      'tabs.all': 'Tous les onglets',
+      'tabs.close': 'Fermer l\u2019onglet',
+      'tabs.untitled': 'Sans titre',
 
       'status.ready': 'Pr\u00eat \u2014 collez ou tapez votre texte, puis appuyez sur Lire.',
       'status.playing': 'Lecture',

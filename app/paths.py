@@ -101,6 +101,17 @@ def cache_dir() -> Path:
     return p
 
 
+def web_storage_dir() -> Path:
+    """Persistent Chromium storage (IndexedDB/localStorage) for the webview.
+
+    Kept under the user data dir so multi-tab documents persist across restarts
+    (the default QWebEngineProfile is off-the-record and would lose them).
+    """
+    p = user_data_dir() / "webstorage"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def settings_ini() -> Path:
     return user_data_dir() / "settings.ini"
 

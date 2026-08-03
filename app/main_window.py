@@ -25,7 +25,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QFileInfo, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QIcon
 from PySide6.QtWebChannel import QWebChannel
-from PySide6.QtWebEngineCore import QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QSystemTrayIcon
 
@@ -93,6 +93,19 @@ class MainWindow(QMainWindow):
         self.view = QWebEngineView(self)
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.setCentralWidget(self.view)
+
+        # Persistent profile so the webview's IndexedDB (multi-tab documents)
+        # and localStorage survive restarts. The default profile is
+        # off-the-record and would silently lose all saved tabs on exit.
+        storage = app_paths.web_storage_dir()
+        self.web_profile = QWebEngineProfile("TextSpeakPro", self)
+        self.web_profile.setPersistentStoragePath(str(storage))
+        self.web_profile.setCachePath(str(storage / "cache"))
+        self.web_profile.setPersistentCookiesPolicy(
+            QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
+        )
+        self.web_page = QWebEnginePage(self.web_profile, self)
+        self.view.setPage(self.web_page)
 
         page_settings = self.view.settings()
         page_settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)

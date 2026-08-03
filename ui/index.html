@@ -691,6 +691,51 @@
     <button class="btn sm" id="findClose">&times;</button>
   </div>
 
+  <!-- Document tab bar -->
+  <style>
+    .tabbar{display:flex;align-items:center;gap:6px;margin-bottom:10px;position:relative}
+    .tabstrip{display:flex;gap:4px;overflow-x:auto;flex:1;padding:2px;scrollbar-width:thin}
+    .tabstrip::-webkit-scrollbar{height:6px}
+    .tabstrip::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
+    .tab{display:flex;align-items:center;gap:6px;padding:6px 8px 6px 10px;border-radius:var(--radius-sm);
+      background:var(--surface);border:1px solid var(--border);color:var(--text-soft);cursor:pointer;
+      white-space:nowrap;max-width:220px;user-select:none;transition:background .15s,border-color .15s,color .15s}
+    .tab:hover{background:var(--card)}
+    .tab.active{background:var(--card);border-color:var(--border-strong);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.12)}
+    .tab .tab-title{overflow:hidden;text-overflow:ellipsis;max-width:150px;font-size:13px;font-weight:500}
+    .tab .tab-title-input{font:inherit;color:var(--text);background:var(--bg2);border:1px solid var(--accent);
+      border-radius:6px;padding:0 4px;max-width:150px;outline:none}
+    .tab .tab-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:transparent;transition:background .2s}
+    .tab.playing .tab-dot{background:var(--success);box-shadow:0 0 0 3px color-mix(in oklab,var(--success) 30%,transparent);animation:tabpulse 1.4s ease-in-out infinite}
+    .tab.generating .tab-dot{background:var(--warning);animation:tabpulse 1s linear infinite}
+    @keyframes tabpulse{0%,100%{opacity:1}50%{opacity:.35}}
+    .tab .tab-close{border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:15px;
+      line-height:1;border-radius:6px;padding:1px 5px;flex:0 0 auto}
+    .tab .tab-close:hover{background:var(--danger);color:#fff}
+    .tab.dragging{opacity:.45}
+    .tab.drag-over{border-color:var(--accent);border-style:dashed}
+    .tab-new,.tab-menu{flex:0 0 auto;border:1px solid var(--border);background:var(--surface);color:var(--text);
+      border-radius:var(--radius-sm);width:32px;height:32px;cursor:pointer;font-size:16px;line-height:1;
+      display:flex;align-items:center;justify-content:center;transition:background .15s,border-color .15s}
+    .tab-new:hover,.tab-menu:hover{background:var(--card);border-color:var(--border-strong)}
+    .tab-overflow{position:absolute;top:40px;right:0;z-index:40;background:var(--card-solid);
+      border:1px solid var(--border-strong);border-radius:var(--radius);box-shadow:var(--shadow-card);
+      padding:6px;max-height:320px;overflow-y:auto;min-width:230px}
+    .tab-overflow .ov-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;
+      cursor:pointer;font-size:13px;color:var(--text-soft)}
+    .tab-overflow .ov-item:hover{background:var(--surface)}
+    .tab-overflow .ov-item.active{color:var(--text);font-weight:600}
+    .tab-overflow .ov-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:transparent}
+    .tab-overflow .ov-item.playing .ov-dot{background:var(--success)}
+    .tab-overflow .ov-item.generating .ov-dot{background:var(--warning)}
+  </style>
+  <div class="tabbar" id="tabBar">
+    <div class="tabstrip" id="tabStrip" role="tablist" aria-label="Document tabs"></div>
+    <button class="tab-new" id="newTabBtn" data-i18n-title="tabs.new" title="New tab">+</button>
+    <button class="tab-menu" id="tabMenuBtn" data-i18n-title="tabs.all" title="All tabs">&#9662;</button>
+    <div class="tab-overflow" id="tabOverflow" hidden></div>
+  </div>
+
   <!-- Editor card -->
   <div class="card card-pad">
     <div class="editor-wrap">
@@ -1065,6 +1110,7 @@
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script src="lib/text-chunker.js"></script>
 <script src="lib/piper-reader.js"></script>
+<script src="lib/tabs.js"></script>
 <script src="app.js"></script>
 
 </body>

@@ -233,6 +233,309 @@ let PREFS = null;
 let AVAILABLE_VOICES = [];
 const reader = new PiperReader();
 
+/* =======================================================================
+   Tabs - multi-document workspace (model in lib/tabs.js, IndexedDB persisted)
+   The #input textarea always mirrors the ACTIVE document. Switching or closing
+   a tab hard-stops playback so audio from an old tab can never play later.
+======================================================================= */
+const Tabs = (() => {
+  const store = new TabStore();
+  const persistence = new TabPersistence();
+  let saveTimer = null;
+  let playingTabId = null;
+  let ready = false;
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { try { persistence.save(store.snapshot()); } catch {} }, 400);
+  }
+
+  function activeDoc() { return store.active(); }
+
+  function _defaultsForNewDoc() {
+    const voice = ($('#voiceSelect') && $('#voiceSelect').value) || (PREFS && PREFS.last_voice) || null;
+    return {
+      voice: (voice && AVAILABLE_VOICES.some(v => v.id === voice)) ? voice : (voice || null),
+      speed: parseFloat($('#rateSlider') ? $('#rateSlider').value : (PREFS && PREFS.last_speed)) || 1,
+      volume: $('#volumeSlider') ? (parseFloat($('#volumeSlider').value)) : (PREFS && PREFS.last_volume != null ? PREFS.last_volume : 1),
+      markdownMode: (MarkdownMode && MarkdownMode.mode) || (PREFS && PREFS.markdown_mode) || 'auto',
+    };
+  }
+
+  // Copy live editor/control state into a document.
+  function captureInto(doc) {
+    if (!doc) return;
+    const input = $('#input');
+    doc.text = input.value;
+    doc.cursor = input.selectionStart || 0;
+    doc.selStart = input.selectionStart || 0;
+    doc.selEnd = input.selectionEnd || 0;
+    doc.scrollTop = input.scrollTop || 0;
+    doc.markdownMode = MarkdownMode.mode;
+    doc.voice = $('#voiceSelect').value || null;
+    doc.speed = parseFloat($('#rateSlider').value) || 1;
+    doc.volume = parseFloat($('#volumeSlider').value);
+    doc.bookmarks = Array.isArray(BOOKMARKS) ? BOOKMARKS.slice() : [];
+    if (playingTabId === doc.id && reader._currentCharIndex) {
+      try { doc.playbackPosition = reader._currentCharIndex(); } catch {}
+    }
+    doc.updatedAt = Date.now();
+  }
+
+  // Load a document into the editor + per-tab controls.
+  function loadIntoEditor(doc) {
+    if (!doc) return;
+    const input = $('#input');
+    input.value = doc.text || '';
+    if (doc.voice && AVAILABLE_VOICES.some(v => v.id === doc.voice)) $('#voiceSelect').value = doc.voice;
+    if (doc.speed) { $('#rateSlider').value = doc.speed; $('#rateValue').textContent = Number(doc.speed).toFixed(2) + '\u00d7'; }
+    if (doc.volume != null && !Number.isNaN(doc.volume)) {
+      $('#volumeSlider').value = doc.volume;
+      $('#volumeValue').textContent = Math.round(doc.volume * 100) + '%';
+      reader.setVolume(doc.volume);
+    }
+    MarkdownMode.setMode(doc.markdownMode || 'auto');
+    MarkdownMode.setSourceHint(null);
+    MarkdownMode.refresh(input.value);
+    BOOKMARKS = Array.isArray(doc.bookmarks) ? doc.bookmarks.slice() : [];
+    renderBookmarks();
+    updateStats();
+    clearHighlight();
+    $('#progressFill').style.width = '0%';
+    $('#chunkProgress').textContent = '0 / 0';
+    try { input.setSelectionRange(doc.selStart || 0, doc.selEnd || 0); } catch {}
+    input.scrollTop = doc.scrollTop || 0;
+  }
+
+  // Stop any playback belonging to the current tab (no stale audio survives).
+  function stopPlaybackForSwitch() {
+    reader.stop();
+    clearHighlight();
+    $('#progressFill').style.width = '0%';
+    playingTabId = null;
+  }
+
+  function switchTo(id) {
+    if (!id || id === store.activeId) return;
+    captureInto(store.active());
+    stopPlaybackForSwitch();
+    store.setActive(id);
+    loadIntoEditor(store.active());
+    render();
+    scheduleSave();
+    $('#input').focus();
+  }
+
+  function newTab() {
+    captureInto(store.active());
+    const doc = store.create(_defaultsForNewDoc());
+    stopPlaybackForSwitch();
+    loadIntoEditor(doc);
+    render();
+    scheduleSave();
+    $('#input').focus();
+  }
+
+  function duplicateTab(id) {
+    if (id === store.activeId) captureInto(store.active());
+    const copy = store.duplicate(id);
+    if (copy) { stopPlaybackForSwitch(); loadIntoEditor(store.active()); render(); scheduleSave(); }
+  }
+
+  function closeTab(id) {
+    if (id === playingTabId) stopPlaybackForSwitch();
+    const wasActive = id === store.activeId;
+    const res = store.close(id);
+    if (res.wasActive) { stopPlaybackForSwitch(); loadIntoEditor(store.active()); }
+    render();
+    scheduleSave();
+  }
+
+  function renameTab(id, title) { store.rename(id, title); render(); scheduleSave(); }
+
+  function nextTab(dir) {
+    const list = store.list();
+    const idx = store.indexOf(store.activeId);
+    if (idx === -1 || list.length < 2) return;
+    const next = list[(idx + dir + list.length) % list.length];
+    switchTo(next.id);
+  }
+
+  // ---- editor sync (called from wireUI) ----
+  function onEditorInput() {
+    const doc = store.active(); if (!doc) return;
+    doc.text = $('#input').value;
+    doc.updatedAt = Date.now();
+    const el = document.querySelector('#tabStrip .tab.active .tab-title');
+    if (el) el.textContent = store.titleOf(doc, I18N.t('tabs.untitled'));
+    scheduleSave();
+  }
+  function onEditorCaret() {
+    const doc = store.active(); if (!doc) return;
+    const input = $('#input');
+    doc.cursor = input.selectionStart || 0;
+    doc.selStart = input.selectionStart || 0;
+    doc.selEnd = input.selectionEnd || 0;
+    doc.scrollTop = input.scrollTop || 0;
+    scheduleSave();
+  }
+  function onControlsChanged() {
+    const doc = store.active(); if (!doc) return;
+    doc.voice = $('#voiceSelect').value || null;
+    doc.speed = parseFloat($('#rateSlider').value) || 1;
+    doc.volume = parseFloat($('#volumeSlider').value);
+    doc.markdownMode = MarkdownMode.mode;
+    scheduleSave();
+  }
+
+  // ---- playback / generation indicators ----
+  function reflectState(state) {
+    const active = state === 'playing' || state === 'loading' || state === 'paused';
+    playingTabId = active ? store.activeId : null;
+    document.querySelectorAll('#tabStrip .tab').forEach(el => {
+      el.classList.toggle('playing', el.dataset.id === playingTabId);
+    });
+  }
+  function reflectGenerating(on) {
+    const doc = store.active();
+    if (doc) doc.audioStatus = on ? 'generating' : 'idle';
+    document.querySelectorAll('#tabStrip .tab').forEach(el => {
+      el.classList.toggle('generating', el.dataset.id === store.activeId && on);
+    });
+  }
+
+  // ---- rendering ----
+  function render() {
+    const strip = $('#tabStrip');
+    if (!strip) return;
+    strip.innerHTML = '';
+    store.list().forEach(doc => {
+      const el = document.createElement('div');
+      el.className = 'tab'
+        + (doc.id === store.activeId ? ' active' : '')
+        + (doc.id === playingTabId ? ' playing' : '')
+        + (doc.audioStatus === 'generating' ? ' generating' : '');
+      el.dataset.id = doc.id;
+      el.draggable = true;
+      el.setAttribute('role', 'tab');
+      el.setAttribute('aria-selected', doc.id === store.activeId ? 'true' : 'false');
+      const dot = document.createElement('span'); dot.className = 'tab-dot';
+      const title = document.createElement('span'); title.className = 'tab-title';
+      title.textContent = store.titleOf(doc, I18N.t('tabs.untitled'));
+      title.title = title.textContent;
+      const close = document.createElement('button');
+      close.className = 'tab-close'; close.type = 'button';
+      close.innerHTML = '&times;';
+      close.title = I18N.t('tabs.close');
+      el.appendChild(dot); el.appendChild(title); el.appendChild(close);
+      strip.appendChild(el);
+
+      close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(doc.id); });
+      el.addEventListener('click', () => switchTo(doc.id));
+      el.addEventListener('dblclick', (e) => { e.preventDefault(); beginRename(el, doc); });
+      // middle-click closes
+      el.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); closeTab(doc.id); } });
+      _wireDrag(el, doc);
+    });
+    if (!$('#tabOverflow').hidden) renderOverflow();
+  }
+
+  function beginRename(el, doc) {
+    const titleEl = el.querySelector('.tab-title');
+    if (!titleEl || el.querySelector('.tab-title-input')) return;
+    const input = document.createElement('input');
+    input.className = 'tab-title-input';
+    input.value = doc.title || store.titleOf(doc, '');
+    titleEl.replaceWith(input);
+    input.focus(); input.select();
+    const commit = () => { renameTab(doc.id, input.value.trim()); };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); render(); }
+    });
+    input.addEventListener('blur', commit);
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('dblclick', (e) => e.stopPropagation());
+  }
+
+  let _dragId = null;
+  function _wireDrag(el, doc) {
+    el.addEventListener('dragstart', (e) => {
+      _dragId = doc.id; el.classList.add('dragging');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', doc.id); } catch {}
+    });
+    el.addEventListener('dragend', () => { _dragId = null; el.classList.remove('dragging'); document.querySelectorAll('#tabStrip .tab').forEach(t => t.classList.remove('drag-over')); });
+    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drag-over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+    el.addEventListener('drop', (e) => {
+      e.preventDefault(); el.classList.remove('drag-over');
+      if (!_dragId || _dragId === doc.id) return;
+      store.moveTo(_dragId, store.indexOf(doc.id));
+      render(); scheduleSave();
+    });
+  }
+
+  function toggleOverflow() {
+    const ov = $('#tabOverflow');
+    if (ov.hidden) { renderOverflow(); ov.hidden = false; }
+    else ov.hidden = true;
+  }
+  function renderOverflow() {
+    const ov = $('#tabOverflow');
+    ov.innerHTML = '';
+    store.list().forEach(doc => {
+      const item = document.createElement('div');
+      item.className = 'ov-item'
+        + (doc.id === store.activeId ? ' active' : '')
+        + (doc.id === playingTabId ? ' playing' : '')
+        + (doc.audioStatus === 'generating' ? ' generating' : '');
+      const dot = document.createElement('span'); dot.className = 'ov-dot';
+      const label = document.createElement('span');
+      label.textContent = store.titleOf(doc, I18N.t('tabs.untitled'));
+      item.appendChild(dot); item.appendChild(label);
+      item.addEventListener('click', () => { switchTo(doc.id); $('#tabOverflow').hidden = true; });
+      ov.appendChild(item);
+    });
+  }
+  function closeOverflow() { const ov = $('#tabOverflow'); if (ov) ov.hidden = true; }
+
+  // ---- boot / migration ----
+  async function init() {
+    let snap = null;
+    try { snap = await persistence.load(); } catch {}
+    if (snap && Array.isArray(snap.docs) && snap.docs.length) {
+      store.init(snap.docs, snap.activeId);
+    } else {
+      // Migrate legacy single-document state (saved_text / bookmarks).
+      const legacyText = (PREFS && PREFS.save_text && PREFS.saved_text) ? PREFS.saved_text : ($('#input').value || '');
+      let legacyBookmarks = [];
+      try { legacyBookmarks = PREFS && PREFS.bookmarks ? JSON.parse(PREFS.bookmarks) : []; } catch {}
+      const seed = createDocument({
+        text: legacyText,
+        cursor: (PREFS && PREFS.saved_position) || 0,
+        selStart: (PREFS && PREFS.saved_position) || 0,
+        selEnd: (PREFS && PREFS.saved_position) || 0,
+        bookmarks: Array.isArray(legacyBookmarks) ? legacyBookmarks : [],
+        ..._defaultsForNewDoc(),
+      });
+      store.init([seed], seed.id);
+      scheduleSave();
+    }
+    ready = true;
+    render();
+    loadIntoEditor(store.active());
+  }
+
+  return {
+    init, render, newTab, duplicateTab, closeTab, switchTo, nextTab,
+    activeDoc, scheduleSave, reflectState, reflectGenerating,
+    onEditorInput, onEditorCaret, onControlsChanged, toggleOverflow, closeOverflow,
+    get isReady() { return ready; },
+    get activeId() { return store.activeId; },
+  };
+})();
+
 /* ---------- Markdown mode (client-side pill + format plumbing) ---------- */
 const MarkdownMode = (() => {
   // Cheap signal detection — mirrors the more thorough one in text_normalize.py
@@ -514,6 +817,7 @@ async function loadTextFromFile(path, nameHint) {
     MarkdownMode.setSourceHint(res.format || 'plain');
     MarkdownMode.refresh(res.text || '');
     updateStats();
+    if (typeof Tabs !== 'undefined' && Tabs.isReady) Tabs.onEditorInput();
     toast(I18N.t('toast.fileLoaded', { name: res.name || nameHint || path }), 'success');
     closeAllDrawers();
     renderRecent();
@@ -550,7 +854,9 @@ function loadBookmarks() {
   BOOKMARKS = PREFS && PREFS.bookmarks ? (function () { try { return JSON.parse(PREFS.bookmarks); } catch { return []; } })() : [];
 }
 function saveBookmarks() {
-  BridgeAPI.setPref('bookmarks', JSON.stringify(BOOKMARKS));
+  // Bookmarks are per-document now; persist into the active tab (IndexedDB).
+  const doc = Tabs.activeDoc();
+  if (doc) { doc.bookmarks = Array.isArray(BOOKMARKS) ? BOOKMARKS.slice() : []; Tabs.scheduleSave(); }
 }
 function renderBookmarks() {
   const host = $('#bookmarkList');
@@ -636,12 +942,14 @@ BridgeAPI.onExport(evt => {
     const name = (evt.path || '').split(/[\\/]/).pop() || 'file';
     toast(I18N.t('export.saved', { name }), 'success', 4500);
     closeExportOverlay(); exportActiveId = null;
+    Tabs.reflectGenerating(false);
     $('#downloadAudioBtn').disabled = false; $('#batchExportBtn').disabled = false;
   } else if (evt.type === 'error') {
     if (evt.message !== 'cancelled') {
       toast(I18N.t('export.failed', { error: evt.message }), 'error', 5000);
     }
     closeExportOverlay(); exportActiveId = null;
+    Tabs.reflectGenerating(false);
     $('#downloadAudioBtn').disabled = false; $('#batchExportBtn').disabled = false;
   }
 });
@@ -658,6 +966,7 @@ function doExport(batch) {
   const author = (PREFS && PREFS.id3_author) || '';
   const textFmt = MarkdownMode.effective;
   $('#downloadAudioBtn').disabled = true; $('#batchExportBtn').disabled = true;
+  Tabs.reflectGenerating(true);
   openExportOverlay(text.length, rate);
   if (batch) {
     const paras = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
@@ -1024,13 +1333,6 @@ async function boot() {
   applyTheme(PREFS.theme || 'system');
   applyLang(PREFS.language || 'system');
 
-  // Load persisted text
-  if (PREFS.save_text && PREFS.saved_text) $('#input').value = PREFS.saved_text;
-  MarkdownMode.refresh($('#input').value);
-
-  // Bookmarks
-  loadBookmarks();
-
   // Voices + catalog + presets
   await loadInstalledVoices();
   loadCatalog();
@@ -1042,6 +1344,11 @@ async function boot() {
   wireTitleBarDrag();
   wireResizeGrips();
   wireDebugLog();
+
+  // Multi-document workspace: restore tabs from IndexedDB, or migrate the
+  // legacy single-document state. Must run after voices load so per-tab voice
+  // selections can be applied.
+  await Tabs.init();
 
   updateStats();
   setStatus('ready');
@@ -1063,18 +1370,28 @@ function wireUI() {
   $('#openCatalogFromBanner').addEventListener('click', () => openDrawer('drawerVoices'));
   $$('[data-drawer-close]').forEach(el => el.addEventListener('click', closeAllDrawers));
 
+  // Document tabs
+  $('#newTabBtn').addEventListener('click', () => Tabs.newTab());
+  $('#tabMenuBtn').addEventListener('click', (e) => { e.stopPropagation(); Tabs.toggleOverflow(); });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#tabOverflow') && !e.target.closest('#tabMenuBtn')) Tabs.closeOverflow();
+  });
+
   // Editor
   const input = $('#input');
   input.addEventListener('input', () => {
     updateStats();
     MarkdownMode.setSourceHint(null);
     MarkdownMode.refresh(input.value);
-    if ($('#saveProgress').checked) BridgeAPI.setPref('saved_text', input.value);
+    Tabs.onEditorInput();
   });
+  // Persist caret/scroll into the active document (debounced inside Tabs).
+  ['keyup', 'click', 'scroll', 'select'].forEach(ev =>
+    input.addEventListener(ev, () => Tabs.onEditorCaret()));
 
   // Markdown pill (auto -> on -> off -> auto)
   const mdChip = document.getElementById('chipMarkdown');
-  if (mdChip) mdChip.addEventListener('click', () => MarkdownMode.cycle());
+  if (mdChip) mdChip.addEventListener('click', () => { MarkdownMode.cycle(); Tabs.onControlsChanged(); });
   input.addEventListener('dblclick', () => {
     const pos = input.selectionStart || 0;
     let start = pos;
@@ -1097,15 +1414,18 @@ function wireUI() {
     const v = parseFloat($('#rateSlider').value);
     $('#rateValue').textContent = v.toFixed(2) + '\u00d7';
     updateStats();
+    Tabs.onControlsChanged();
     if (['playing', 'paused', 'loading'].includes(reader.state)) doPlay(reader._currentCharIndex());
   });
   $('#volumeSlider').addEventListener('input', () => {
     const v = parseFloat($('#volumeSlider').value);
     $('#volumeValue').textContent = Math.round(v * 100) + '%';
     reader.setVolume(v);
+    Tabs.onControlsChanged();
   });
   $('#voiceSelect').addEventListener('change', () => {
     BridgeAPI.setPref('last_voice', $('#voiceSelect').value);
+    Tabs.onControlsChanged();
     if (['playing', 'paused', 'loading'].includes(reader.state)) doPlay(reader._currentCharIndex());
   });
   $$('.preset').forEach(btn => btn.addEventListener('click', () => {
@@ -1133,6 +1453,7 @@ function wireUI() {
   $('#exportCancel').addEventListener('click', () => {
     if (exportActiveId) BridgeAPI.cancelSynthesize(exportActiveId);
     closeExportOverlay(); exportActiveId = null;
+    Tabs.reflectGenerating(false);
     $('#downloadAudioBtn').disabled = false; $('#batchExportBtn').disabled = false;
   });
 
@@ -1152,6 +1473,7 @@ function wireUI() {
     const mode = $('#mdMode').value;
     MarkdownMode.setMode(mode);
     BridgeAPI.setPref('markdown_mode', mode);
+    Tabs.onControlsChanged();
   });
   $('#mdReadCode').addEventListener('change', () => BridgeAPI.setPref('md_read_code', $('#mdReadCode').checked));
   $('#mdReadUrls').addEventListener('change', () => BridgeAPI.setPref('md_read_urls', $('#mdReadUrls').checked));
@@ -1208,13 +1530,13 @@ function wireUI() {
     if (!file) return;
     // Drops inside the webview only expose File; for real paths we rely on window-level DnD (bridge.fileDropped)
     const r = new FileReader();
-    r.onload = ev => { $('#input').value = ev.target.result || ''; updateStats(); toast(I18N.t('toast.fileLoaded', { name: file.name }), 'success'); };
+    r.onload = ev => { $('#input').value = ev.target.result || ''; updateStats(); MarkdownMode.refresh($('#input').value); Tabs.onEditorInput(); toast(I18N.t('toast.fileLoaded', { name: file.name }), 'success'); };
     r.readAsText(file);
   });
   fileInput.addEventListener('change', () => {
     const file = fileInput.files[0]; if (!file) return;
     const r = new FileReader();
-    r.onload = ev => { $('#input').value = ev.target.result || ''; updateStats(); toast(I18N.t('toast.fileLoaded', { name: file.name }), 'success'); };
+    r.onload = ev => { $('#input').value = ev.target.result || ''; updateStats(); MarkdownMode.refresh($('#input').value); Tabs.onEditorInput(); toast(I18N.t('toast.fileLoaded', { name: file.name }), 'success'); };
     r.readAsText(file);
   });
   $('#fetchUrl').addEventListener('click', async () => {
@@ -1230,7 +1552,7 @@ function wireUI() {
         tmp.querySelectorAll('script, style, nav, header, footer').forEach(el => el.remove());
         text = tmp.textContent || tmp.innerText;
       }
-      $('#input').value = text.trim(); updateStats();
+      $('#input').value = text.trim(); updateStats(); MarkdownMode.refresh($('#input').value); Tabs.onEditorInput();
       toast('Content loaded', 'success');
       closeAllDrawers();
     } catch (e) {
@@ -1240,17 +1562,18 @@ function wireUI() {
   $('#pasteClipboard').addEventListener('click', async () => {
     try {
       const text = await navigator.clipboard.readText();
-      $('#input').value = text; updateStats();
+      $('#input').value = text; updateStats(); MarkdownMode.refresh($('#input').value); Tabs.onEditorInput();
       toast(I18N.t('toast.pastedClipboard'), 'success');
     } catch {
       const txt = await BridgeAPI.readClipboard();
-      if (txt) { $('#input').value = txt; updateStats(); toast(I18N.t('toast.pastedClipboard'), 'success'); }
+      if (txt) { $('#input').value = txt; updateStats(); MarkdownMode.refresh($('#input').value); Tabs.onEditorInput(); toast(I18N.t('toast.pastedClipboard'), 'success'); }
       else toast(I18N.t('toast.clipboardError'), 'error');
     }
   });
   $('#clearText').addEventListener('click', () => {
     $('#input').value = ''; updateStats(); reader.stop();
     clearHighlight(); $('#progressFill').style.width = '0%';
+    MarkdownMode.refresh(''); Tabs.onEditorInput();
     toast(I18N.t('toast.textCleared'));
   });
 
@@ -1278,6 +1601,12 @@ function wireUI() {
     }
     if (e.ctrlKey && !e.shiftKey && e.key === 'Enter') { e.preventDefault(); $('#playBtn').click(); return; }
     if (e.ctrlKey && e.shiftKey && e.key === 'Enter') { e.preventDefault(); $('#playFromCursor').click(); return; }
+    // Tab management
+    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 't') { e.preventDefault(); Tabs.newTab(); return; }
+    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'w') { e.preventDefault(); if (Tabs.activeId) Tabs.closeTab(Tabs.activeId); return; }
+    if (e.ctrlKey && e.key === 'Tab') { e.preventDefault(); Tabs.nextTab(e.shiftKey ? -1 : 1); return; }
+    if (e.ctrlKey && e.key === 'PageDown') { e.preventDefault(); Tabs.nextTab(1); return; }
+    if (e.ctrlKey && e.key === 'PageUp') { e.preventDefault(); Tabs.nextTab(-1); return; }
     if (e.key === 'Escape') {
       if ($('#findBar').classList.contains('visible')) { $('#findBar').classList.remove('visible'); return; }
       if (document.querySelectorAll('.drawer.open').length) { closeAllDrawers(); return; }
@@ -1314,7 +1643,7 @@ function wireUI() {
   });
   BridgeAPI.onReadClipboardRequested(async () => {
     const text = await BridgeAPI.readClipboard();
-    if (text) { $('#input').value = text; updateStats(); setTimeout(() => doPlay(0), 50); }
+    if (text) { $('#input').value = text; updateStats(); MarkdownMode.refresh(text); Tabs.onEditorInput(); setTimeout(() => doPlay(0), 50); }
   });
   BridgeAPI.onStopRequested(() => { reader.stop(); clearHighlight(); $('#progressFill').style.width = '0%'; });
 
@@ -1323,6 +1652,7 @@ function wireUI() {
     setStatus(state, reason);
     updateButtons(state);
     updateMediaSession(state);
+    Tabs.reflectState(state);
     $('#progressFill').classList.toggle('shimmer', state === 'loading');
     if (state === 'done') toast(I18N.t('toast.readingComplete'), 'success');
   });
