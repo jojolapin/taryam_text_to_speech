@@ -39,7 +39,9 @@
       // Dependency seam: defaults reproduce the original browser globals.
       this._AudioCtor = deps.Audio || (typeof Audio !== 'undefined' ? Audio : null);
       this._URL = deps.URL || (typeof URL !== 'undefined' ? URL : (typeof globalThis !== 'undefined' ? globalThis.URL : null));
-      this._bridge = deps.bridge || (typeof BridgeAPI !== 'undefined' ? BridgeAPI : null);
+      // A provider turns text -> { b64, mime }. Supplied per-session via
+      // start(opts.provider); this is only a fallback for tests/direct use.
+      this._provider = deps.provider || null;
       this._chunker = deps.chunker || (typeof TextChunker !== 'undefined' ? TextChunker : null);
       this._i18n = deps.i18n || (typeof I18N !== 'undefined' ? I18N : { t: (k) => k });
       this._logger = deps.logger || (typeof Logger !== 'undefined' ? Logger : _noopLogger);
@@ -86,6 +88,11 @@
         volume: Math.max(0, Math.min(1, Number(opts.volume) || 1.0)),
       };
       this.opts.textFormat = opts.textFormat || 'plain';
+      this.opts.provider = opts.provider || this._provider;
+      if (!this.opts.provider || typeof this.opts.provider.synthesize !== 'function') {
+        this._emit('error', { message: 'No voice provider available' });
+        return false;
+      }
       this.audio.volume = this.opts.volume;
       this.chunks = this._chunker.chunk(text, 450);
       if (!this.chunks.length) { this._emit('error', { message: 'No chunks.' }); return false; }
@@ -134,11 +141,16 @@
       if (this.audioCache.has(idx)) return;
       if (this.pendingFetches.has(idx)) return;
       const chunk = this.chunks[idx];
-      const promise = this._bridge.synthesize(chunk.text, this.opts.voice, 1.0 / this.opts.rate, this.opts.volume, this.opts.textFormat || 'plain');
+      const promise = this.opts.provider.synthesize(chunk.text, {
+        voice: this.opts.voice,
+        rate: this.opts.rate,
+        volume: this.opts.volume,
+        textFormat: this.opts.textFormat || 'plain',
+      });
       this.pendingFetches.set(idx, { promise });
-      promise.then(({ wavB64 }) => {
+      promise.then(({ b64, mime }) => {
         if (this.sessionId !== sid) return;
-        const blob = this._b64ToBlob(wavB64, 'audio/wav');
+        const blob = this._b64ToBlob(b64, mime || 'audio/wav');
         const url = this._URL.createObjectURL(blob);
         this.audioCache.set(idx, { url });
         this._logger.debug(`chunk ${idx + 1} loaded (${(blob.size / 1024).toFixed(1)} KB)`);

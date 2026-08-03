@@ -26,6 +26,7 @@ from . import APP_AUTHOR, APP_COPYRIGHT, APP_NAME, APP_VERSION
 from . import paths as app_paths
 from . import text_normalize
 from . import voice_catalog
+from .providers import PiperProvider, ProviderRegistry
 from .settings import Settings
 from .tts_engine import CancelToken, PiperMissingError, TTSEngine, write_mp3_with_tags
 
@@ -105,6 +106,10 @@ class Bridge(QObject):
         self._cancels: dict[str, CancelToken] = {}
         self._dl_cancels: dict[str, threading.Event] = {}
 
+        # Voice providers (Piper offline today; OpenAI added in a later phase).
+        self.providers = ProviderRegistry("piper")
+        self.providers.register(PiperProvider(self.engine))
+
     # ---- text normalization (markdown / html -> TTS plain) ----
 
     def _resolve_md_lang(self) -> str:
@@ -145,6 +150,15 @@ class Bridge(QObject):
     # ============================================================
     # App info
     # ============================================================
+    @Slot(result=str)
+    def provider_status(self) -> str:
+        """JSON list of voice providers and their availability (UI status)."""
+        try:
+            return json.dumps(self.providers.status())
+        except Exception:  # noqa: BLE001
+            log.exception("provider_status failed")
+            return json.dumps([])
+
     @Slot(result=str)
     def app_info(self) -> str:
         return json.dumps({

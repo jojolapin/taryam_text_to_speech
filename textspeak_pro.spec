@@ -63,6 +63,7 @@ datas = [
     (str(ROOT / 'ui' / 'app.js'),               'ui'),
     (str(ROOT / 'ui' / 'i18n.js'),              'ui'),
     (str(ROOT / 'ui' / 'lib' / 'text-chunker.js'), 'ui/lib'),
+    (str(ROOT / 'ui' / 'lib' / 'providers.js'),    'ui/lib'),
     (str(ROOT / 'ui' / 'lib' / 'piper-reader.js'), 'ui/lib'),
     (str(ROOT / 'ui' / 'lib' / 'tabs.js'),         'ui/lib'),
     (str(ROOT / 'voice_catalog.json'),          '.'),

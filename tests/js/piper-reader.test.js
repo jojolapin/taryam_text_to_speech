@@ -1,12 +1,13 @@
 /* Regression tests for the PiperReader playback core (ui/lib/piper-reader.js).
  * (C) 2026 JojoLapin Inc.
- * Run: node --test tests/js/   (or: npm test)
+ * Run: npm test
  *
  * These pin the SENSITIVE guarantees that must never regress:
  *   - stale audio from a stopped/superseded session never plays;
  *   - _hardStop revokes every object URL (no leaks);
  *   - only the latest session ever reaches playback.
- * Timers are mocked so the 60s chunk-wait watchdog never keeps Node alive.
+ * The reader is provider-agnostic: it calls provider.synthesize(text, opts) and
+ * expects { b64, mime }. Timers are mocked so the 60s watchdog never keeps Node alive.
  */
 'use strict';
 
@@ -24,16 +25,17 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function makeBridge() {
+function makeProvider() {
   const calls = [];
   return {
-    synthesize(text, voice, lengthScale, volume, fmt) {
+    id: 'test',
+    synthesize(text, opts) {
       const d = deferred();
-      calls.push({ text, d });
+      calls.push({ text, opts, d });
       return d.promise;
     },
     calls,
-    resolveAll(b64 = 'AAAA') { calls.forEach(c => c.d.resolve({ wavB64: b64 })); },
+    resolveAll(b64 = 'AAAA', mime = 'audio/wav') { calls.forEach(c => c.d.resolve({ b64, mime })); },
   };
 }
 
@@ -72,19 +74,19 @@ function makeAudioClass(registry) {
 
 function makeReader() {
   const registry = { instances: [] };
-  const bridge = makeBridge();
+  const provider = makeProvider();
   const url = makeURL();
   const Audio = makeAudioClass(registry);
   const reader = new PiperReader({
     Audio,
     URL: url,
-    bridge,
+    provider,
     chunker: TextChunker,
     i18n: { t: (k) => k },
     logger: { info() {}, debug() {}, warn() {}, error() {} },
     b64ToBlob: () => ({ size: 1024 }),
   });
-  return { reader, bridge, url, audio: () => registry.instances[0], registry };
+  return { reader, provider, url, audio: () => registry.instances[0], registry };
 }
 
 const LONG = 'First sentence is here and reasonably sized. '
@@ -96,11 +98,11 @@ const LONG = 'First sentence is here and reasonably sized. '
 
 test('happy path: chunk resolves, audio plays the created URL', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { reader, bridge, url, audio } = makeReader();
+  const { reader, provider, url, audio } = makeReader();
 
   const startP = reader.start(LONG, { voice: 'v' });
   assert.strictEqual(reader.state, 'loading');
-  bridge.resolveAll();
+  provider.resolveAll();
   await startP;
 
   assert.strictEqual(reader.state, 'playing');
@@ -109,13 +111,40 @@ test('happy path: chunk resolves, audio plays the created URL', async (t) => {
   assert.ok(audio().playCount >= 1, 'play() should have been called');
 });
 
+test('provider receives normalized per-chunk options', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { reader, provider } = makeReader();
+  const startP = reader.start(LONG, { voice: 'en_US-x', rate: 1.25, volume: 0.8, textFormat: 'markdown' });
+  provider.resolveAll();
+  await startP;
+  const first = provider.calls[0];
+  assert.strictEqual(first.opts.voice, 'en_US-x');
+  assert.strictEqual(first.opts.rate, 1.25);
+  assert.strictEqual(first.opts.volume, 0.8);
+  assert.strictEqual(first.opts.textFormat, 'markdown');
+});
+
+test('start() with no provider emits an error and does not play', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = { instances: [] };
+  const url = makeURL();
+  const Audio = makeAudioClass(registry);
+  const errors = [];
+  const reader = new PiperReader({ Audio, URL: url, chunker: TextChunker, i18n: { t: (k) => k }, b64ToBlob: () => ({ size: 1 }) });
+  reader.on('error', (e) => errors.push(e));
+  const ok = await reader.start(LONG, { voice: 'v' }); // no provider supplied
+  assert.strictEqual(ok, false);
+  assert.strictEqual(url.created.length, 0);
+  assert.ok(errors.length >= 1);
+});
+
 test('stop() before chunk resolves: stale synth never creates a URL or plays', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { reader, bridge, url, audio } = makeReader();
+  const { reader, provider, url, audio } = makeReader();
 
   const startP = reader.start(LONG, { voice: 'v' });     // session begins, awaiting chunk 0
   const stopped = reader.stop();                          // supersedes the session
-  bridge.resolveAll();                                    // stale results arrive late
+  provider.resolveAll();                                  // stale results arrive late
   const ok = await startP;
 
   assert.strictEqual(stopped, true);
@@ -127,10 +156,10 @@ test('stop() before chunk resolves: stale synth never creates a URL or plays', a
 
 test('_hardStop revokes a cached URL and clears the cache (no leaks)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { reader, bridge, url } = makeReader();
+  const { reader, provider, url } = makeReader();
 
   const startP = reader.start(LONG, { voice: 'v' });
-  bridge.resolveAll();
+  provider.resolveAll();
   await startP;                                           // now playing, URL(s) live
 
   const liveBefore = url.live.size;
@@ -143,11 +172,11 @@ test('_hardStop revokes a cached URL and clears the cache (no leaks)', async (t)
 
 test('starting a new session supersedes the old one; only the latest plays', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { reader, bridge, url, audio } = makeReader();
+  const { reader, provider, url, audio } = makeReader();
 
   const first = reader.start(LONG, { voice: 'v' });       // session A (awaiting)
   const second = reader.start(LONG, { voice: 'v' });      // session B supersedes A
-  bridge.resolveAll();                                    // resolve everything
+  provider.resolveAll();                                  // resolve everything
 
   const rFirst = await first;
   const rSecond = await second;
@@ -155,21 +184,37 @@ test('starting a new session supersedes the old one; only the latest plays', asy
   assert.strictEqual(rFirst, false, 'the superseded session must not report success');
   assert.strictEqual(rSecond, true, 'the latest session should play');
   assert.strictEqual(reader.state, 'playing');
-  // Exactly one live URL is bound to the audio element for the active session.
   assert.ok(url.live.has(audio().src), 'audio.src must be a live (non-revoked) URL');
 });
 
 test('reaching end of chunks finishes and revokes everything', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { reader, bridge, url, audio } = makeReader();
+  const { reader, provider, url, audio } = makeReader();
 
-  // Single short chunk so one "ended" completes the document.
   const startP = reader.start('Only one short chunk here.', { voice: 'v' });
-  bridge.resolveAll();
+  provider.resolveAll();
   await startP;
   assert.strictEqual(reader.state, 'playing');
 
   audio().fire('ended');                                  // last chunk ends
   assert.strictEqual(reader.state, 'done');
   assert.strictEqual(url.live.size, 0, 'finishing must revoke all URLs');
+});
+
+test('provider-supplied mime is used to build the blob', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = { instances: [] };
+  const url = makeURL();
+  const Audio = makeAudioClass(registry);
+  const provider = makeProvider();
+  const seen = [];
+  const reader = new PiperReader({
+    Audio, URL: url, provider, chunker: TextChunker,
+    i18n: { t: (k) => k },
+    b64ToBlob: (b64, mime) => { seen.push(mime); return { size: 1 }; },
+  });
+  const startP = reader.start('Short.', { voice: 'v' });
+  provider.resolveAll('AAAA', 'audio/mpeg');
+  await startP;
+  assert.ok(seen.includes('audio/mpeg'), 'blob should be built with the provider mime');
 });

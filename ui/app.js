@@ -233,6 +233,11 @@ let PREFS = null;
 let AVAILABLE_VOICES = [];
 const reader = new PiperReader();
 
+/* Voice providers. Piper (offline) is registered now; OpenAI is added in a
+   later phase. Playback picks the provider from the active document. */
+const Providers = new ProviderRegistry('piper');
+Providers.register(new PiperProvider());
+
 /* =======================================================================
    Tabs - multi-document workspace (model in lib/tabs.js, IndexedDB persisted)
    The #input textarea always mirrors the ACTIVE document. Switching or closing
@@ -731,11 +736,14 @@ function updateStats() {
 
 /* ---------- Player controls ---------- */
 function getOpts() {
+  const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+  const providerId = (doc && doc.provider) || Providers.defaultId;
   return {
     voice: $('#voiceSelect').value,
     rate: parseFloat($('#rateSlider').value) || 1,
     volume: parseFloat($('#volumeSlider').value) || 1,
     textFormat: MarkdownMode.effective,
+    provider: Providers.get(providerId),
   };
 }
 function doPlay(fromPosition = 0) {
