@@ -59,11 +59,13 @@ if _piper_spec and _piper_spec.origin:
 # Bundled app resources.
 # ---------------------------------------------------------------------------
 datas = [
-    (str(ROOT / 'ui' / 'index.html'),      'ui'),
-    (str(ROOT / 'ui' / 'app.js'),          'ui'),
-    (str(ROOT / 'ui' / 'i18n.js'),         'ui'),
-    (str(ROOT / 'voice_catalog.json'),     '.'),
-    (str(ROOT / 'resources' / 'icon.png'), 'resources'),
+    (str(ROOT / 'ui' / 'index.html'),           'ui'),
+    (str(ROOT / 'ui' / 'app.js'),               'ui'),
+    (str(ROOT / 'ui' / 'i18n.js'),              'ui'),
+    (str(ROOT / 'ui' / 'lib' / 'text-chunker.js'), 'ui/lib'),
+    (str(ROOT / 'ui' / 'lib' / 'piper-reader.js'), 'ui/lib'),
+    (str(ROOT / 'voice_catalog.json'),          '.'),
+    (str(ROOT / 'resources' / 'icon.png'),      'resources'),
 ]
 if ICON_ICO.exists():
     datas.append((str(ICON_ICO), 'resources'))

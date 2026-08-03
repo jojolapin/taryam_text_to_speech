@@ -16,6 +16,14 @@ __pycache__/
 build/
 dist/
 
+# Secrets / local config (never commit real keys)
+.env
+.env.*
+!.env.example
+
+# Node / JS test tooling
+node_modules/
+
 # OS / editor
 .DS_Store
 Thumbs.db
