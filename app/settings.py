@@ -42,7 +42,19 @@ _DEFAULTS: dict[str, Any] = {
     "md_read_code": False,           # read code block contents verbatim
     "md_read_urls": False,           # read URLs in links
     "md_read_tables": True,          # read table rows as sentences
+    # OpenAI voice provider (non-secret settings only; the API key is stored
+    # under "openai_api_key" which is deliberately NOT listed here so it never
+    # leaks through all()/get_prefs into the webview).
+    "openai_model": "gpt-4o-mini-tts",
+    "openai_voice": "alloy",
+    "openai_format": "mp3",          # mp3 | wav | opus | aac | flac
+    "openai_base_url": "",           # optional override; empty => official API
+    "ai_disclosure_ack": False,      # user acknowledged AI-voice disclosure
 }
+
+
+# Settings keys that hold secrets and must never be returned by all()/get_prefs.
+SECRET_KEYS = frozenset({"openai_api_key"})
 
 
 class Settings:

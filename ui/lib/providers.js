@@ -25,6 +25,7 @@
   }
   if (root) {
     root.PiperProvider = api.PiperProvider;
+    root.OpenAIProvider = api.OpenAIProvider;
     root.ProviderRegistry = api.ProviderRegistry;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
@@ -56,6 +57,33 @@
     cancel(id) { if (id && this._bridge && this._bridge.cancelSynthesize) this._bridge.cancelSynthesize(id); }
   }
 
+  /* OpenAI: online, AI-generated. Delegates to the bridge; the API key never
+   * touches the webview. Output mime is decided by the requested format. */
+  class OpenAIProvider {
+    constructor(deps = {}) {
+      this.id = 'openai';
+      this._bridge = deps.bridge || (typeof BridgeAPI !== 'undefined' ? BridgeAPI : null);
+    }
+    supportsOffline() { return false; }
+    supportsStreaming() { return false; }
+    requiresNetwork() { return true; }
+    isAI() { return true; }
+    validate() { return { ok: true }; }
+
+    async synthesize(text, opts = {}) {
+      const { b64, mime } = await this._bridge.synthesizeOpenAI(text, {
+        voice: opts.voice,
+        model: opts.model,
+        speed: opts.rate,
+        instructions: opts.instructions,
+        format: opts.format,
+        textFormat: opts.textFormat || 'plain',
+      });
+      return { b64, mime };
+    }
+    cancel(id) { if (id && this._bridge && this._bridge.cancelSynthesize) this._bridge.cancelSynthesize(id); }
+  }
+
   /* Registry: name -> provider, with a default fallback (piper). */
   class ProviderRegistry {
     constructor(defaultId = 'piper') {
@@ -69,5 +97,5 @@
     get defaultId() { return this._defaultId; }
   }
 
-  return { PiperProvider, ProviderRegistry };
+  return { PiperProvider, OpenAIProvider, ProviderRegistry };
 });

@@ -26,6 +26,14 @@ from . import APP_AUTHOR, APP_COPYRIGHT, APP_NAME, APP_VERSION
 from . import paths as app_paths
 from . import text_normalize
 from . import voice_catalog
+from .openai_provider import (
+    OPENAI_FORMATS,
+    OPENAI_MODELS,
+    OPENAI_VOICES,
+    OpenAIError,
+    OpenAIProvider,
+    resolve_config,
+)
 from .providers import PiperProvider, ProviderRegistry
 from .settings import Settings
 from .tts_engine import CancelToken, PiperMissingError, TTSEngine, write_mp3_with_tags
@@ -80,6 +88,8 @@ class Bridge(QObject):
     # ---- signals consumed by JS ----
     synthesizeReady = Signal(str, str)       # (request_id, wav_base64)
     synthesizeError = Signal(str, str)       # (request_id, message)
+    openaiAudioReady = Signal(str, str, str) # (request_id, audio_base64, mime)
+    openaiAudioError = Signal(str, str)      # (request_id, message)
     exportProgress = Signal(str, str, float) # (request_id, stage, ratio)
     exportDone = Signal(str, str, float, float)  # (request_id, path, audio_seconds, synth_seconds)
     exportError = Signal(str, str)           # (request_id, message)
@@ -106,9 +116,10 @@ class Bridge(QObject):
         self._cancels: dict[str, CancelToken] = {}
         self._dl_cancels: dict[str, threading.Event] = {}
 
-        # Voice providers (Piper offline today; OpenAI added in a later phase).
+        # Voice providers: Piper (offline) + OpenAI (online, opt-in).
         self.providers = ProviderRegistry("piper")
         self.providers.register(PiperProvider(self.engine))
+        self.providers.register(OpenAIProvider(self.settings))
 
     # ---- text normalization (markdown / html -> TTS plain) ----
 
@@ -158,6 +169,46 @@ class Bridge(QObject):
         except Exception:  # noqa: BLE001
             log.exception("provider_status failed")
             return json.dumps([])
+
+    # ============================================================
+    # OpenAI configuration / status (API key never leaves Python)
+    # ============================================================
+    @Slot(result=str)
+    def openai_status(self) -> str:
+        """Non-secret OpenAI config for the UI. Never includes the API key."""
+        try:
+            cfg = resolve_config(self.settings)
+            return json.dumps({
+                "configured": cfg.configured,
+                "keySource": cfg.key_source,
+                "model": cfg.model,
+                "voice": cfg.voice,
+                "format": cfg.response_format,
+                "baseUrl": cfg.base_url,
+                "voices": OPENAI_VOICES,
+                "models": OPENAI_MODELS,
+                "formats": OPENAI_FORMATS,
+                "disclosureAck": bool(self.settings.get("ai_disclosure_ack", False)),
+            })
+        except Exception:  # noqa: BLE001
+            log.exception("openai_status failed")
+            return json.dumps({"configured": False, "keySource": "none"})
+
+    @Slot(str, result=str)
+    def set_openai_key(self, key: str) -> str:
+        """Store the API key locally (QSettings). Returns refreshed status JSON.
+        The key is intentionally not echoed back."""
+        self.settings.set("openai_api_key", (key or "").strip())
+        return self.openai_status()
+
+    @Slot(result=str)
+    def clear_openai_key(self) -> str:
+        self.settings.set("openai_api_key", "")
+        return self.openai_status()
+
+    @Slot(result=bool)
+    def openai_has_key(self) -> bool:
+        return bool(resolve_config(self.settings).configured)
 
     @Slot(result=str)
     def app_info(self) -> str:
@@ -263,6 +314,51 @@ class Bridge(QObject):
             except Exception as e:  # noqa: BLE001
                 log.exception("Synthesis failed")
                 self.synthesizeError.emit(request_id, str(e))
+            finally:
+                self._cancels.pop(request_id, None)
+
+        self.pool.start(_Runnable(_worker))
+
+    @Slot(str, str, str, float, str, str, str, str)
+    def synthesize_openai(self, text: str, voice: str, model: str, speed: float,
+                          instructions: str, response_format: str,
+                          text_format: str, request_id: str) -> None:
+        """Synthesize one chunk via OpenAI. Emits openaiAudioReady/Error.
+
+        The API key is resolved and used entirely inside the provider; it is
+        never part of this call's arguments or the emitted signals.
+        """
+        token = CancelToken()
+        self._cancels[request_id] = token
+        speech_text = self._normalize_for_tts(text, text_format or "plain")
+        provider = self.providers.get("openai")
+
+        def _worker():
+            try:
+                if not isinstance(provider, OpenAIProvider):
+                    self.openaiAudioError.emit(request_id, "OpenAI provider unavailable.")
+                    return
+                audio, mime = provider.synthesize(
+                    speech_text,
+                    voice=voice or None,
+                    model=model or None,
+                    speed=speed or 1.0,
+                    instructions=instructions or "",
+                    response_format=response_format or None,
+                    cancel=token,
+                )
+                if token.cancelled:
+                    return
+                self.openaiAudioReady.emit(
+                    request_id, base64.b64encode(audio).decode("ascii"), mime
+                )
+            except OpenAIError as e:
+                if str(e) == "cancelled":
+                    return
+                self.openaiAudioError.emit(request_id, str(e))
+            except Exception:  # noqa: BLE001 - sanitized; never leak details
+                log.exception("OpenAI synthesis failed")
+                self.openaiAudioError.emit(request_id, "OpenAI synthesis failed.")
             finally:
                 self._cancels.pop(request_id, None)
 

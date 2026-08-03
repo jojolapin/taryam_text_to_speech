@@ -90,6 +90,16 @@ const BridgeAPI = (() => {
       pending.delete(id);
       p.reject(new Error(msg));
     });
+    bridge.openaiAudioReady.connect((id, b64, mime) => {
+      const p = pending.get(id); if (!p) return;
+      pending.delete(id);
+      p.resolve({ b64, mime });
+    });
+    bridge.openaiAudioError.connect((id, msg) => {
+      const p = pending.get(id); if (!p) return;
+      pending.delete(id);
+      p.reject(new Error(msg));
+    });
     bridge.exportProgress.connect((id, stage, ratio) => {
       exportListeners.forEach(fn => fn({ id, type: 'progress', stage, ratio }));
     });
@@ -141,7 +151,23 @@ const BridgeAPI = (() => {
         bridge.synthesize(text, voice, lengthScale, volume, id, textFormat || 'plain');
       });
     },
+    synthesizeOpenAI(text, { voice, model, speed, instructions, format, textFormat } = {}) {
+      const id = nextId('oa');
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        bridge.synthesize_openai(
+          text, voice || '', model || '', Number(speed) || 1.0,
+          instructions || '', format || '', textFormat || 'plain', id
+        );
+      });
+    },
     cancelSynthesize(id) { if (id) bridge.cancel(id); },
+
+    // OpenAI config/status (API key stays on the Python side).
+    openaiStatus() { return bridge.openai_status().then(JSON.parse); },
+    setOpenAIKey(key) { return bridge.set_openai_key(key || '').then(JSON.parse); },
+    clearOpenAIKey() { return bridge.clear_openai_key().then(JSON.parse); },
+    providerStatus() { return bridge.provider_status().then(JSON.parse); },
 
     normalizeText(text, textFormat) {
       return bridge.normalize_text(text || '', textFormat || 'auto').then(JSON.parse);
@@ -237,6 +263,8 @@ const reader = new PiperReader();
    later phase. Playback picks the provider from the active document. */
 const Providers = new ProviderRegistry('piper');
 Providers.register(new PiperProvider());
+Providers.register(new OpenAIProvider());
+let OPENAI_STATUS = null;   // cached openai_status() payload
 
 /* =======================================================================
    Tabs - multi-document workspace (model in lib/tabs.js, IndexedDB persisted)
@@ -280,6 +308,8 @@ const Tabs = (() => {
     doc.voice = $('#voiceSelect').value || null;
     doc.speed = parseFloat($('#rateSlider').value) || 1;
     doc.volume = parseFloat($('#volumeSlider').value);
+    if ($('#engineSelect')) doc.provider = $('#engineSelect').value || 'piper';
+    if ($('#openaiInstructions')) doc.speakingStyle = $('#openaiInstructions').value || null;
     doc.bookmarks = Array.isArray(BOOKMARKS) ? BOOKMARKS.slice() : [];
     if (playingTabId === doc.id && reader._currentCharIndex) {
       try { doc.playbackPosition = reader._currentCharIndex(); } catch {}
@@ -292,7 +322,8 @@ const Tabs = (() => {
     if (!doc) return;
     const input = $('#input');
     input.value = doc.text || '';
-    if (doc.voice && AVAILABLE_VOICES.some(v => v.id === doc.voice)) $('#voiceSelect').value = doc.voice;
+    applyEngineUI(doc.provider || 'piper');
+    if ((doc.provider || 'piper') !== 'openai' && doc.voice && AVAILABLE_VOICES.some(v => v.id === doc.voice)) $('#voiceSelect').value = doc.voice;
     if (doc.speed) { $('#rateSlider').value = doc.speed; $('#rateValue').textContent = Number(doc.speed).toFixed(2) + '\u00d7'; }
     if (doc.volume != null && !Number.isNaN(doc.volume)) {
       $('#volumeSlider').value = doc.volume;
@@ -390,6 +421,8 @@ const Tabs = (() => {
     doc.speed = parseFloat($('#rateSlider').value) || 1;
     doc.volume = parseFloat($('#volumeSlider').value);
     doc.markdownMode = MarkdownMode.mode;
+    if ($('#engineSelect')) doc.provider = $('#engineSelect').value || 'piper';
+    if ($('#openaiInstructions')) doc.speakingStyle = $('#openaiInstructions').value || null;
     scheduleSave();
   }
 
@@ -693,8 +726,14 @@ async function loadInstalledVoices() {
   if (noVoices && !PREFS.wizard_complete) showWizard();
 }
 
+function currentProviderId() {
+  const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+  return (doc && doc.provider) || 'piper';
+}
+
 function populateVoiceSelect() {
   const sel = $('#voiceSelect');
+  if (currentProviderId() === 'openai') { populateOpenAIVoices(sel); return; }
   sel.innerHTML = '';
   if (!AVAILABLE_VOICES.length) {
     const opt = document.createElement('option');
@@ -722,6 +761,98 @@ function populateVoiceSelect() {
   if (savedVoice && AVAILABLE_VOICES.some(v => v.id === savedVoice)) sel.value = savedVoice;
 }
 
+/* ---------- OpenAI engine UI ---------- */
+function populateOpenAIVoices(sel) {
+  sel.innerHTML = '';
+  const voices = (OPENAI_STATUS && OPENAI_STATUS.voices) || [];
+  if (!voices.length) {
+    const o = document.createElement('option');
+    o.textContent = I18N.t('set.voice.none');
+    sel.appendChild(o);
+    return;
+  }
+  voices.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+    sel.appendChild(o);
+  });
+  const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+  const want = (doc && doc.voice) || (OPENAI_STATUS && OPENAI_STATUS.voice) || 'alloy';
+  if (voices.includes(want)) sel.value = want;
+}
+
+function populateOpenAIModelSelects() {
+  const models = (OPENAI_STATUS && OPENAI_STATUS.models) || [];
+  ['#openaiModel', '#openaiModelDefault'].forEach(id => {
+    const sel = $(id); if (!sel) return;
+    sel.innerHTML = '';
+    models.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      sel.appendChild(o);
+    });
+    if (OPENAI_STATUS && models.includes(OPENAI_STATUS.model)) sel.value = OPENAI_STATUS.model;
+  });
+}
+
+function updateOpenAIConfigBadge() {
+  const badge = $('#openaiConfigBadge');
+  const hint = $('#openaiConfigHint');
+  if (!badge) return;
+  const configured = !!(OPENAI_STATUS && OPENAI_STATUS.configured);
+  badge.textContent = configured ? I18N.t('openai.configured') : I18N.t('openai.notConfigured');
+  badge.className = 'badge ' + (configured ? 'badge-ok' : 'badge-bad');
+  if (hint) hint.hidden = configured;
+}
+
+function updateOpenAIKeyState() {
+  const st = $('#openaiKeyState'); if (!st) return;
+  if (OPENAI_STATUS && OPENAI_STATUS.configured) {
+    st.textContent = I18N.t('settings.openai.key.set', { src: OPENAI_STATUS.keySource || '' });
+  } else {
+    st.textContent = I18N.t('settings.openai.key.unset');
+  }
+}
+
+// Swap the controls between Piper and OpenAI for the active document.
+function applyEngineUI(pid) {
+  pid = pid || currentProviderId();
+  const engineSel = $('#engineSelect');
+  if (engineSel && engineSel.value !== pid) engineSel.value = pid;
+  const isOpenAI = pid === 'openai';
+  const panel = $('#openaiPanel'); if (panel) panel.hidden = !isOpenAI;
+  populateVoiceSelect();
+  if (isOpenAI) {
+    const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+    const instr = $('#openaiInstructions');
+    if (instr && document.activeElement !== instr) instr.value = (doc && doc.speakingStyle) || '';
+    if (OPENAI_STATUS) {
+      const m = $('#openaiModel');
+      if (m && OPENAI_STATUS.models && OPENAI_STATUS.models.includes(OPENAI_STATUS.model)) m.value = OPENAI_STATUS.model;
+    }
+    updateOpenAIConfigBadge();
+  }
+  updateButtons(reader.state);
+}
+
+async function refreshOpenAIStatus() {
+  try {
+    OPENAI_STATUS = await BridgeAPI.openaiStatus();
+  } catch (e) {
+    OPENAI_STATUS = { configured: false, keySource: 'none', voices: [], models: [], model: 'gpt-4o-mini-tts', format: 'mp3' };
+  }
+  populateOpenAIModelSelects();
+  updateOpenAIKeyState();
+  const base = $('#openaiBaseUrl');
+  if (base && document.activeElement !== base) {
+    const url = OPENAI_STATUS.baseUrl || '';
+    base.value = (url && url !== 'https://api.openai.com/v1') ? url : '';
+  }
+  if (currentProviderId() === 'openai') { applyEngineUI('openai'); }
+  return OPENAI_STATUS;
+}
+
 /* ---------- Stats ---------- */
 function updateStats() {
   const text = $('#input').value || '';
@@ -738,32 +869,50 @@ function updateStats() {
 function getOpts() {
   const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
   const providerId = (doc && doc.provider) || Providers.defaultId;
-  return {
+  const opts = {
     voice: $('#voiceSelect').value,
     rate: parseFloat($('#rateSlider').value) || 1,
     volume: parseFloat($('#volumeSlider').value) || 1,
     textFormat: MarkdownMode.effective,
     provider: Providers.get(providerId),
+    providerOptions: {},
   };
+  if (providerId === 'openai') {
+    opts.providerOptions = {
+      model: (OPENAI_STATUS && OPENAI_STATUS.model) || 'gpt-4o-mini-tts',
+      instructions: ($('#openaiInstructions') && $('#openaiInstructions').value) || '',
+      format: (OPENAI_STATUS && OPENAI_STATUS.format) || 'mp3',
+    };
+  }
+  return opts;
+}
+function engineReady(providerId) {
+  if (providerId === 'openai') return !!(OPENAI_STATUS && OPENAI_STATUS.configured);
+  return AVAILABLE_VOICES.length > 0;
 }
 function doPlay(fromPosition = 0) {
   const text = $('#input').value;
   if (!text.trim()) { toast(I18N.t('toast.noText')); return; }
+  const providerId = currentProviderId();
   const voice = $('#voiceSelect').value;
-  if (!voice || voice === 'Loading voices...' || !AVAILABLE_VOICES.some(v => v.id === voice)) {
+  if (providerId === 'openai') {
+    if (!(OPENAI_STATUS && OPENAI_STATUS.configured)) { toast(I18N.t('openai.needKey'), 'error'); return; }
+    if (!voice) { toast(I18N.t('toast.noVoice'), 'error'); return; }
+  } else if (!voice || voice === 'Loading voices...' || !AVAILABLE_VOICES.some(v => v.id === voice)) {
     toast(I18N.t('toast.noVoice'), 'error');
     return;
   }
-  BridgeAPI.setPref('last_voice', voice);
   BridgeAPI.setPref('last_speed', parseFloat($('#rateSlider').value));
   BridgeAPI.setPref('last_volume', parseFloat($('#volumeSlider').value));
+  if (providerId !== 'openai') BridgeAPI.setPref('last_voice', voice);
   if ($('#hlToggle').checked) { $('#render').classList.add('visible'); updateHighlight(fromPosition); }
   reader.start(text, getOpts(), fromPosition);
 }
 function updateButtons(state) {
   const active = state === 'loading' || state === 'playing' || state === 'paused';
-  $('#playBtn').disabled = active || AVAILABLE_VOICES.length === 0;
-  $('#playFromCursor').disabled = active || AVAILABLE_VOICES.length === 0;
+  const ready = engineReady(currentProviderId());
+  $('#playBtn').disabled = active || !ready;
+  $('#playFromCursor').disabled = active || !ready;
   $('#pauseBtn').disabled = state !== 'playing';
   $('#resumeBtn').disabled = state !== 'paused';
   $('#stopBtn').disabled = !active;
@@ -1353,6 +1502,10 @@ async function boot() {
   wireResizeGrips();
   wireDebugLog();
 
+  // OpenAI provider status (models/voices/config) before tabs load, so an
+  // OpenAI document can restore its engine UI correctly.
+  await refreshOpenAIStatus();
+
   // Multi-document workspace: restore tabs from IndexedDB, or migrate the
   // legacy single-document state. Must run after voices load so per-tab voice
   // selections can be applied.
@@ -1432,9 +1585,61 @@ function wireUI() {
     Tabs.onControlsChanged();
   });
   $('#voiceSelect').addEventListener('change', () => {
-    BridgeAPI.setPref('last_voice', $('#voiceSelect').value);
+    if (currentProviderId() !== 'openai') BridgeAPI.setPref('last_voice', $('#voiceSelect').value);
     Tabs.onControlsChanged();
     if (['playing', 'paused', 'loading'].includes(reader.state)) doPlay(reader._currentCharIndex());
+  });
+
+  // Engine selector (Piper vs OpenAI), per document.
+  $('#engineSelect').addEventListener('change', () => {
+    const pid = $('#engineSelect').value;
+    const doc = Tabs.activeDoc(); if (doc) doc.provider = pid;
+    if (pid === 'openai' && !(OPENAI_STATUS && OPENAI_STATUS.disclosureAck)) {
+      BridgeAPI.setPref('ai_disclosure_ack', true);
+      if (OPENAI_STATUS) OPENAI_STATUS.disclosureAck = true;
+      toast(I18N.t('openai.disclosureToast'), 'info');
+    }
+    if (['playing', 'paused', 'loading'].includes(reader.state)) reader.stop();
+    applyEngineUI(pid);
+    Tabs.onControlsChanged();
+    if (pid === 'openai' && !(OPENAI_STATUS && OPENAI_STATUS.configured)) {
+      toast(I18N.t('openai.needKey'), 'error');
+    }
+  });
+  $('#openaiModel').addEventListener('change', () => {
+    const v = $('#openaiModel').value;
+    BridgeAPI.setPref('openai_model', v);
+    if (OPENAI_STATUS) OPENAI_STATUS.model = v;
+    const def = $('#openaiModelDefault'); if (def) def.value = v;
+  });
+  $('#openaiInstructions').addEventListener('input', () => { Tabs.onControlsChanged(); });
+  $('#openaiOpenSettings').addEventListener('click', () => { openDrawer('drawerSettings'); });
+
+  // Settings drawer: OpenAI key + defaults
+  $('#openaiKeySave').addEventListener('click', async () => {
+    const val = ($('#openaiKeyInput').value || '').trim();
+    OPENAI_STATUS = await BridgeAPI.setOpenAIKey(val);
+    $('#openaiKeyInput').value = '';
+    populateOpenAIModelSelects();
+    updateOpenAIKeyState();
+    if (currentProviderId() === 'openai') applyEngineUI('openai');
+    toast(I18N.t('settings.openai.key.saved'), 'success');
+  });
+  $('#openaiKeyClear').addEventListener('click', async () => {
+    OPENAI_STATUS = await BridgeAPI.clearOpenAIKey();
+    updateOpenAIKeyState();
+    if (currentProviderId() === 'openai') applyEngineUI('openai');
+    toast(I18N.t('settings.openai.key.cleared'), 'info');
+  });
+  $('#openaiModelDefault').addEventListener('change', () => {
+    const v = $('#openaiModelDefault').value;
+    BridgeAPI.setPref('openai_model', v);
+    if (OPENAI_STATUS) OPENAI_STATUS.model = v;
+    const p = $('#openaiModel'); if (p) p.value = v;
+  });
+  $('#openaiBaseUrl').addEventListener('change', async () => {
+    BridgeAPI.setPref('openai_base_url', ($('#openaiBaseUrl').value || '').trim());
+    await refreshOpenAIStatus();
   });
   $$('.preset').forEach(btn => btn.addEventListener('click', () => {
     $('#rateSlider').value = btn.dataset.speed;

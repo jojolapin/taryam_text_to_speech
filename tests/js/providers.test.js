@@ -7,7 +7,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { PiperProvider, ProviderRegistry } = require('../../ui/lib/providers.js');
+const { PiperProvider, OpenAIProvider, ProviderRegistry } = require('../../ui/lib/providers.js');
 
 function fakeBridge() {
   const calls = [];
@@ -61,9 +61,50 @@ test('PiperProvider.cancel forwards to the bridge', () => {
 test('ProviderRegistry registers, looks up, and falls back to default', () => {
   const reg = new ProviderRegistry('piper');
   const piper = reg.register(new PiperProvider({ bridge: fakeBridge() }));
+  const openai = reg.register(new OpenAIProvider({ bridge: fakeOpenAIBridge() }));
   assert.strictEqual(reg.get('piper'), piper);
-  assert.strictEqual(reg.has('piper'), true);
+  assert.strictEqual(reg.get('openai'), openai);
+  assert.strictEqual(reg.has('openai'), true);
   assert.strictEqual(reg.get('unknown'), piper, 'unknown id falls back to default');
-  assert.deepStrictEqual(reg.ids(), ['piper']);
+  assert.deepStrictEqual(reg.ids(), ['piper', 'openai']);
   assert.strictEqual(reg.defaultId, 'piper');
+});
+
+function fakeOpenAIBridge() {
+  const calls = [];
+  return {
+    synthesizeOpenAI(text, opts) {
+      calls.push({ text, opts });
+      return Promise.resolve({ b64: 'MP3', mime: 'audio/mpeg' });
+    },
+    cancelled: [],
+    cancelSynthesize(id) { this.cancelled.push(id); },
+    calls,
+  };
+}
+
+test('OpenAIProvider advertises online, AI, non-offline', () => {
+  const p = new OpenAIProvider({ bridge: fakeOpenAIBridge() });
+  assert.strictEqual(p.id, 'openai');
+  assert.strictEqual(p.supportsOffline(), false);
+  assert.strictEqual(p.requiresNetwork(), true);
+  assert.strictEqual(p.isAI(), true);
+  assert.strictEqual(p.supportsStreaming(), false);
+});
+
+test('OpenAIProvider forwards rate as speed plus model/instructions/format', async () => {
+  const bridge = fakeOpenAIBridge();
+  const p = new OpenAIProvider({ bridge });
+  const out = await p.synthesize('hi', {
+    voice: 'nova', rate: 1.25, model: 'gpt-4o-mini-tts',
+    instructions: 'whisper', format: 'mp3', textFormat: 'markdown',
+  });
+  assert.deepStrictEqual(out, { b64: 'MP3', mime: 'audio/mpeg' });
+  const sent = bridge.calls[0].opts;
+  assert.strictEqual(sent.speed, 1.25);
+  assert.strictEqual(sent.voice, 'nova');
+  assert.strictEqual(sent.model, 'gpt-4o-mini-tts');
+  assert.strictEqual(sent.instructions, 'whisper');
+  assert.strictEqual(sent.format, 'mp3');
+  assert.strictEqual(sent.textFormat, 'markdown');
 });

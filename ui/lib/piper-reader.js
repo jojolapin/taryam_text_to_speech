@@ -89,6 +89,8 @@
       };
       this.opts.textFormat = opts.textFormat || 'plain';
       this.opts.provider = opts.provider || this._provider;
+      // Opaque per-provider extras (e.g. OpenAI model/instructions/format).
+      this.opts.providerOptions = opts.providerOptions || {};
       if (!this.opts.provider || typeof this.opts.provider.synthesize !== 'function') {
         this._emit('error', { message: 'No voice provider available' });
         return false;
@@ -146,6 +148,7 @@
         rate: this.opts.rate,
         volume: this.opts.volume,
         textFormat: this.opts.textFormat || 'plain',
+        ...this.opts.providerOptions,
       });
       this.pendingFetches.set(idx, { promise });
       promise.then(({ b64, mime }) => {
