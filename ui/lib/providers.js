@@ -82,6 +82,9 @@
       return { b64, mime };
     }
     cancel(id) { if (id && this._bridge && this._bridge.cancelSynthesize) this._bridge.cancelSynthesize(id); }
+    // Cancel any in-flight OpenAI requests (called by the reader on stop) so we
+    // don't keep generating sections the user will never hear.
+    cancelPending() { if (this._bridge && this._bridge.cancelAllOpenAI) this._bridge.cancelAllOpenAI(); }
   }
 
   /* Registry: name -> provider, with a default fallback (piper). */

@@ -201,6 +201,96 @@ test('reaching end of chunks finishes and revokes everything', async (t) => {
   assert.strictEqual(url.live.size, 0, 'finishing must revoke all URLs');
 });
 
+test('retries a transient chunk failure, then succeeds', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = { instances: [] };
+  const url = makeURL();
+  const Audio = makeAudioClass(registry);
+  let calls = 0;
+  const provider = {
+    id: 'x',
+    synthesize() {
+      calls++;
+      if (calls <= 2) return Promise.reject(new Error('Could not reach OpenAI. Check your internet connection.'));
+      return Promise.resolve({ b64: 'AAAA', mime: 'audio/mpeg' });
+    },
+  };
+  const reader = new PiperReader({
+    Audio, URL: url, provider, chunker: TextChunker, maxRetries: 3, retryBaseMs: 100,
+    schedule: (fn) => fn(),   // run backoff immediately for deterministic testing
+    i18n: { t: (k) => k }, b64ToBlob: () => ({ size: 1 }),
+  });
+  const startP = reader.start('Short text here.', { voice: 'v' });
+  for (let k = 0; k < 12; k++) await Promise.resolve();
+  const ok = await startP;
+  assert.strictEqual(ok, true, 'should eventually play after retries');
+  assert.strictEqual(calls, 3, 'two failures then one success');
+  assert.strictEqual(reader.state, 'playing');
+});
+
+test('does not retry a non-retryable error (unauthorized)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = { instances: [] };
+  const url = makeURL();
+  const Audio = makeAudioClass(registry);
+  let calls = 0;
+  const provider = {
+    id: 'x',
+    synthesize() { calls++; return Promise.reject(new Error('OpenAI rejected the API key (unauthorized).')); },
+  };
+  const errors = [];
+  const reader = new PiperReader({
+    Audio, URL: url, provider, chunker: TextChunker, maxRetries: 3, retryBaseMs: 100,
+    i18n: { t: (k) => k }, b64ToBlob: () => ({ size: 1 }),
+  });
+  reader.on('error', (e) => errors.push(e));
+  const ok = await reader.start('Short text here.', { voice: 'v' });
+  assert.strictEqual(ok, false);
+  assert.strictEqual(calls, 1, 'must not retry a deterministic auth error');
+  assert.ok(errors.length >= 1);
+});
+
+test('stop() asks the provider to cancel pending requests', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = { instances: [] };
+  const url = makeURL();
+  const Audio = makeAudioClass(registry);
+  let cancelPendingCalls = 0;
+  const provider = {
+    id: 'x',
+    synthesize: () => Promise.resolve({ b64: 'AAAA', mime: 'audio/wav' }),
+    cancelPending() { cancelPendingCalls++; },
+  };
+  const reader = new PiperReader({
+    Audio, URL: url, provider, chunker: TextChunker,
+    i18n: { t: (k) => k }, b64ToBlob: () => ({ size: 1 }),
+  });
+  await reader.start('Short.', { voice: 'v' });
+  reader.stop();
+  assert.ok(cancelPendingCalls >= 1, 'provider.cancelPending should be invoked on stop');
+});
+
+test('start() uses an injected chunker and maxChars', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const registry = { instances: [] };
+  const url = makeURL();
+  const Audio = makeAudioClass(registry);
+  const provider = makeProvider();
+  const seen = [];
+  const fakeChunker = {
+    chunk(text, maxChars) { seen.push(maxChars); return [{ text, start: 0, end: text.length }]; },
+    findChunkAtPosition() { return 0; },
+  };
+  const reader = new PiperReader({
+    Audio, URL: url, provider, chunker: TextChunker,
+    i18n: { t: (k) => k }, b64ToBlob: () => ({ size: 1 }),
+  });
+  const startP = reader.start('Some text.', { voice: 'v', chunker: fakeChunker, maxChars: 1600 });
+  provider.resolveAll();
+  await startP;
+  assert.deepStrictEqual(seen, [1600], 'injected chunker + maxChars should be used');
+});
+
 test('provider-supplied mime is used to build the blob', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const registry = { instances: [] };

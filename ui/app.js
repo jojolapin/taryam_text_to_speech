@@ -55,6 +55,7 @@ const BridgeAPI = (() => {
   let bridge = null;
   let rid = 0;
   const pending = new Map();       // id -> { resolve, reject }
+  const openaiPending = new Set(); // in-flight OpenAI request ids (for cancel)
   const exportListeners = new Set();
   const catalogListeners = new Set();
   const sampleWaiters = new Map();
@@ -153,15 +154,18 @@ const BridgeAPI = (() => {
     },
     synthesizeOpenAI(text, { voice, model, speed, instructions, format, textFormat } = {}) {
       const id = nextId('oa');
-      return new Promise((resolve, reject) => {
+      openaiPending.add(id);
+      const p = new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         bridge.synthesize_openai(
           text, voice || '', model || '', Number(speed) || 1.0,
           instructions || '', format || '', textFormat || 'plain', id
         );
       });
+      return p.finally(() => openaiPending.delete(id));
     },
     cancelSynthesize(id) { if (id) bridge.cancel(id); },
+    cancelAllOpenAI() { openaiPending.forEach(id => { try { bridge.cancel(id); } catch {} }); },
 
     // OpenAI config/status (API key stays on the Python side).
     openaiStatus() { return bridge.openai_status().then(JSON.parse); },
@@ -257,7 +261,9 @@ function escapeHtml(s) {
 let APP_INFO = null;
 let PREFS = null;
 let AVAILABLE_VOICES = [];
-const reader = new PiperReader();
+// Retry transient (mostly network) chunk failures; deterministic errors like a
+// missing key or voice are not retried (see reader._isRetryable).
+const reader = new PiperReader({ maxRetries: 2, retryBaseMs: 600 });
 
 /* Voice providers. Piper (offline) is registered now; OpenAI is added in a
    later phase. Playback picks the provider from the active document. */
@@ -883,6 +889,9 @@ function getOpts() {
       instructions: ($('#openaiInstructions') && $('#openaiInstructions').value) || '',
       format: (OPENAI_STATUS && OPENAI_STATUS.format) || 'mp3',
     };
+    // Larger, boundary-aware sections for online synthesis (fewer API calls,
+    // never split a decimal/date/URL/etc). Well under OpenAI's input limit.
+    if (typeof SemanticChunker !== 'undefined') { opts.chunker = SemanticChunker; opts.maxChars = 1600; }
   }
   return opts;
 }
@@ -1871,7 +1880,10 @@ function wireUI() {
   });
   reader.on('progress', ({ charIndex, totalChars, chunkIdx, totalChunks }) => {
     if (totalChars > 0) $('#progressFill').style.width = (charIndex / totalChars * 100).toFixed(1) + '%';
-    $('#chunkProgress').textContent = `${Math.min(chunkIdx + 1, totalChunks)} / ${totalChunks}`;
+    const n = Math.min(chunkIdx + 1, totalChunks);
+    $('#chunkProgress').textContent = currentProviderId() === 'openai'
+      ? I18N.t('progress.section', { n, m: totalChunks })
+      : `${n} / ${totalChunks}`;
     if ($('#hlToggle').checked) updateHighlight(charIndex);
     if ($('#saveProgress').checked) BridgeAPI.setPref('saved_position', charIndex);
   });

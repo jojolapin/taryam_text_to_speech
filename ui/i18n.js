@@ -62,6 +62,7 @@
       'settings.openai.model': 'Default model',
       'settings.openai.baseurl': 'Base URL (optional)',
       'settings.openai.hint': 'Your key is stored locally on this device and is sent only to OpenAI to synthesize speech. You can also set OPENAI_API_KEY in a .env file next to the app.',
+      'progress.section': 'Section {n} of {m}',
 
       // Status banner states
       'status.ready': 'Ready \u2014 paste or type text, then press Play.',
@@ -332,6 +333,7 @@
       'settings.openai.model': 'Mod\u00e8le par d\u00e9faut',
       'settings.openai.baseurl': 'URL de base (optionnel)',
       'settings.openai.hint': 'Votre cl\u00e9 est stock\u00e9e localement sur cet appareil et n\u2019est envoy\u00e9e qu\u2019\u00e0 OpenAI pour synth\u00e9tiser la parole. Vous pouvez aussi d\u00e9finir OPENAI_API_KEY dans un fichier .env plac\u00e9 pr\u00e8s de l\u2019application.',
+      'progress.section': 'Section {n} sur {m}',
 
       'status.ready': 'Pr\u00eat \u2014 collez ou tapez votre texte, puis appuyez sur Lire.',
       'status.playing': 'Lecture',

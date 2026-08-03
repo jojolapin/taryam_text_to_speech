@@ -46,6 +46,11 @@
       this._i18n = deps.i18n || (typeof I18N !== 'undefined' ? I18N : { t: (k) => k });
       this._logger = deps.logger || (typeof Logger !== 'undefined' ? Logger : _noopLogger);
       this._b64ToBlob = deps.b64ToBlob || defaultB64ToBlob;
+      // Transient-failure retry (mainly for the online provider). 0 = off.
+      this._maxRetries = deps.maxRetries != null ? deps.maxRetries : 0;
+      this._retryBaseMs = deps.retryBaseMs != null ? deps.retryBaseMs : 400;
+      this._retries = new Map();       // idx -> attempts
+      this._schedule = deps.schedule || ((fn, ms) => setTimeout(fn, ms));
 
       this.audio = new this._AudioCtor();
       this.audio.preload = 'auto';
@@ -95,10 +100,14 @@
         this._emit('error', { message: 'No voice provider available' });
         return false;
       }
+      // Per-session chunker (provider may supply a semantic chunker + limit).
+      this.opts.chunker = opts.chunker || this._chunker;
+      this.opts.maxChars = Math.max(1, Number(opts.maxChars) || 450);
       this.audio.volume = this.opts.volume;
-      this.chunks = this._chunker.chunk(text, 450);
+      this._retries.clear();
+      this.chunks = this.opts.chunker.chunk(text, this.opts.maxChars);
       if (!this.chunks.length) { this._emit('error', { message: 'No chunks.' }); return false; }
-      this.chunkIdx = this._chunker.findChunkAtPosition(this.chunks, Math.max(0, Math.min(fromPosition, text.length)));
+      this.chunkIdx = this.opts.chunker.findChunkAtPosition(this.chunks, Math.max(0, Math.min(fromPosition, text.length)));
       this._transition('loading', { reason: `fetching chunk ${this.chunkIdx + 1}/${this.chunks.length}` });
       this._ensureChunkLoaded(this.chunkIdx, sid);
       this._ensureChunkLoaded(this.chunkIdx + 1, sid);
@@ -151,7 +160,11 @@
         ...this.opts.providerOptions,
       });
       this.pendingFetches.set(idx, { promise });
+      // NB: delete the pending entry inside each handler (not in a .finally) so a
+      // scheduled retry can register a fresh fetch for the same idx without the
+      // old settlement clobbering it.
       promise.then(({ b64, mime }) => {
+        this.pendingFetches.delete(idx);
         if (this.sessionId !== sid) return;
         const blob = this._b64ToBlob(b64, mime || 'audio/wav');
         const url = this._URL.createObjectURL(blob);
@@ -159,12 +172,28 @@
         this._logger.debug(`chunk ${idx + 1} loaded (${(blob.size / 1024).toFixed(1)} KB)`);
         this._resolveChunkWaiters(idx, null);
       }).catch(e => {
+        this.pendingFetches.delete(idx);
         if (this.sessionId !== sid) return;
+        const attempts = this._retries.get(idx) || 0;
+        if (attempts < this._maxRetries && this._isRetryable(e)) {
+          this._retries.set(idx, attempts + 1);
+          const backoff = this._retryBaseMs * Math.pow(2, attempts);
+          this._logger.warn(`chunk ${idx + 1} failed (attempt ${attempts + 1}/${this._maxRetries}); retrying in ${backoff}ms: ${e.message}`);
+          this._schedule(() => {
+            if (this.sessionId === sid && !this.audioCache.has(idx)) this._ensureChunkLoaded(idx, sid);
+          }, backoff);
+          return;
+        }
         this._logger.error(`chunk ${idx + 1} failed: ${e.message}`);
         this._resolveChunkWaiters(idx, e);
-      }).finally(() => {
-        this.pendingFetches.delete(idx);
       });
+    }
+    _isRetryable(e) {
+      const m = ((e && e.message) || '').toLowerCase();
+      if (!m) return true;
+      // Deterministic/config errors should not be retried; transient network
+      // and server errors should.
+      return !/(unauthorized|not configured|rejected|cancel|not allowed|not found|too large|piper-missing|voice-missing|no chunks|nothing to)/.test(m);
     }
     _waitForChunk(idx, sid) {
       return new Promise((resolve, reject) => {
@@ -253,6 +282,14 @@
     _hardStop(reason, silent = false) {
       if (!silent) this._logger.debug('hard stop: ' + reason);
       this.sessionId += 1;
+      if (this._retries) this._retries.clear();
+      // Best-effort: ask the provider to cancel any in-flight network requests
+      // (prevents generating chunks the user will never hear).
+      try {
+        if (this.opts && this.opts.provider && typeof this.opts.provider.cancelPending === 'function') {
+          this.opts.provider.cancelPending();
+        }
+      } catch {}
       try { this.audio.pause(); } catch {}
       try { this.audio.removeAttribute('src'); this.audio.load(); } catch {}
       this.pendingFetches.clear();
