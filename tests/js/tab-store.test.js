@@ -25,6 +25,28 @@ test('createDocument fills defaults and a stable id', () => {
   assert.ok(d.createdAt && d.updatedAt);
 });
 
+test('createDocument seeds Phase-7 fields (style + pronunciation)', () => {
+  const d = createDocument({ text: 'hi' });
+  assert.strictEqual(d.speakingStyle, 'neutral');
+  assert.strictEqual(d.speakingInstructions, '');
+  assert.deepStrictEqual(d.pronunciationRules, []);
+});
+
+test('createDocument repairs invalid Phase-7 fields from a snapshot', () => {
+  const d = createDocument({ speakingStyle: null, speakingInstructions: 5, pronunciationRules: 'x' });
+  assert.strictEqual(d.speakingStyle, 'neutral');
+  assert.strictEqual(d.speakingInstructions, '');
+  assert.deepStrictEqual(d.pronunciationRules, []);
+});
+
+test('createDocument preserves provided Phase-7 values', () => {
+  const rules = [{ from: 'Dr', to: 'Doctor', enabled: true }];
+  const d = createDocument({ speakingStyle: 'calm', speakingInstructions: 'soft', pronunciationRules: rules });
+  assert.strictEqual(d.speakingStyle, 'calm');
+  assert.strictEqual(d.speakingInstructions, 'soft');
+  assert.deepStrictEqual(d.pronunciationRules, rules);
+});
+
 test('init guarantees at least one tab and a valid activeId', () => {
   const s = store();
   const active = s.init([], null);

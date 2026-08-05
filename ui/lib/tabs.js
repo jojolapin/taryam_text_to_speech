@@ -48,9 +48,11 @@
       scrollTop: 0,
       bookmarks: [],             // [{id, position, preview, timestamp}]
       markdownMode: 'auto',      // auto | on | off
-      provider: 'piper',         // piper | openai (openai wired in a later phase)
+      provider: 'piper',         // piper | openai
       voice: null,
-      speakingStyle: null,
+      speakingStyle: 'neutral',  // OpenAI delivery preset id
+      speakingInstructions: '',  // optional free-text override
+      pronunciationRules: [],    // per-document non-destructive rules
       speed: null,               // null => fall back to global default
       volume: null,
       playbackPosition: 0,
@@ -64,6 +66,9 @@
     if (!doc.createdAt) doc.createdAt = ts;
     if (!doc.updatedAt) doc.updatedAt = ts;
     if (!Array.isArray(doc.bookmarks)) doc.bookmarks = [];
+    if (!Array.isArray(doc.pronunciationRules)) doc.pronunciationRules = [];
+    if (!doc.speakingStyle) doc.speakingStyle = 'neutral';
+    if (typeof doc.speakingInstructions !== 'string') doc.speakingInstructions = '';
     return doc;
   }
 

@@ -8,14 +8,19 @@
 
 ## Highlights
 
-- **Completely offline** - powered by [Piper TTS](https://github.com/OHF-Voice/piper1-gpl). Your text never leaves your machine.
-- **One file to run** - a single `TextSpeakPro.exe` on Windows, no installer required (installer is optional).
+- **Offline-first** - powered by [Piper TTS](https://github.com/OHF-Voice/piper1-gpl). With Piper voices, your text never leaves your machine. No cloud, no account, no telemetry.
+- **Optional OpenAI voices** - opt-in online provider (`gpt-4o-mini-tts`, `tts-1/-hd`) for extra-natural voices. Your API key is stored locally and only ever sent to OpenAI; a clear in-app disclosure explains what leaves your machine.
+- **Multi-document tabs** - work on several texts at once, each with its own voice, provider, style, position, and bookmarks. State is restored on relaunch.
+- **Speaking styles** - one-click delivery presets (narration, newscaster, calm, cheerful, storyteller, whisper...) for OpenAI voices, plus an optional free-text override.
+- **Pronunciation dictionary** - teach the reader how to say names, acronyms, or abbreviations *without changing your text*. Global and per-document rules, whole-word / case / regex options, and a live preview. Applies to both playback and export.
+- **AI smart tools** - clean up, summarize, explain simply, or translate the current text. Results open in a **new tab** so your original is never modified.
 - **50+ voices, 30+ languages** - downloadable from the built-in catalog, with one-click install and a "Refresh from web" button.
 - **Full English and French UI** - follows your OS locale automatically, with a manual override.
 - **Light, Dark, and System themes** - with Windows 11 Mica backdrop and rounded corners when available.
-- **Audio export** - MP3 (with ID3 tags), WAV, OGG. Batch mode splits by paragraph.
+- **Accessible** - keyboard-reachable controls, visible focus rings, ARIA labels, a built-in keyboard-shortcuts help dialog (`F1` / `?`), and `prefers-reduced-motion` support.
+- **Audio export** - MP3 (with ID3 tags), WAV, OGG (and OpenAI formats). Batch mode splits by paragraph. On-disk audio cache speeds up replay/export, with in-app cache management.
 - **Portable or installed** - portable mode keeps all settings and voices next to the exe (USB-friendly).
-- **Rich playback** - play / pause / resume / stop / restart, skip +/-10s, speed 0.5x to 2x, volume control, progress highlighting, auto-scroll, bookmarks.
+- **Rich playback** - play / pause / resume / stop / restart, skip +/-10s, sentence & paragraph navigation, speed 0.5x to 2x, volume control, sentence/word progress highlighting, auto-scroll, bookmarks.
 - **Keyboard shortcuts** + **media keys** + **Bluetooth headset** controls (MediaSession API).
 - **Drag-and-drop** .txt / .md / .html / .pdf / .json onto the window.
 - **System tray** with "Read clipboard now" quick action.
@@ -26,6 +31,16 @@
 1. Download `TextSpeakPro.exe` (or `TextSpeakPro-portable.zip` for the portable build).
 2. Run it. The first-launch wizard guides you through picking a language, theme, and downloading a voice or two.
 3. Paste or drop text, pick a voice, press **Play**.
+
+## Online voices & AI tools (optional)
+
+Everything above works fully offline with Piper. If you *want* OpenAI's voices or the AI smart tools, add an API key:
+
+1. Open **Settings -> OpenAI** and paste your key (stored locally, never returned to the UI), **or** put `OPENAI_API_KEY=sk-...` in a `.env` file next to the app / in the app data folder.
+2. Pick **OpenAI** as the engine, choose a **Speaking style**, and press Play.
+3. **Smart tools** (the sparkles chip): clean up, summarize, explain, or translate the current text. The result opens in a new tab; your original is untouched.
+
+Privacy: with Piper nothing leaves your device. With OpenAI selected, the text being synthesized (or transformed) is sent to OpenAI over HTTPS. The key is only used in the `Authorization` header and is never logged or echoed back to the UI; errors are sanitized so the key can't leak.
 
 ## Quick start (developer)
 
@@ -85,7 +100,7 @@ For a "proper" installed experience with Start Menu shortcuts, Add/Remove Progra
 1. Install [Inno Setup 6+](https://jrsoftware.org/isdl.php).
 2. Run `build.bat` first (to produce `dist/TextSpeakPro.exe`).
 3. Open `installer/TextSpeakPro.iss` in Inno Setup Compiler and click **Compile**.
-4. Output: `installer/Output/TextSpeakPro-Setup-1.0.0.exe`.
+4. Output: `installer/Output/TextSpeakPro-Setup-1.1.0.exe`.
 
 ### Manual build (if you prefer explicit steps)
 
@@ -106,7 +121,7 @@ python -m venv .venv-build
 ### Taking it to another computer
 
 - **Portable**: copy `TextSpeakPro-portable.zip`, unzip on the target machine, double-click. Works on any Windows 10/11 x64 machine without admin rights.
-- **Installer**: copy `TextSpeakPro-Setup-1.0.0.exe`, double-click, next-next-finish.
+- **Installer**: copy `TextSpeakPro-Setup-1.1.0.exe`, double-click, next-next-finish.
 - **Cross-platform**: build on the target OS. PyInstaller is not a cross-compiler - build Windows exes on Windows, macOS apps on macOS, Linux binaries on Linux. Same `build.sh`/`build.bat` on each.
 
 ### Size-reduction tips (optional)
@@ -137,7 +152,12 @@ Voices: `<data>/voices/`  &nbsp;&middot;&nbsp;  Logs: `<data>/logs/`  &nbsp;&mid
 | `Space` | Pause / resume (when editor isn't focused) |
 | `Esc` | Stop / close dialogs |
 | `Left` / `Right` | Skip -10s / +10s |
+| `[` / `]` | Previous / next sentence |
+| `Ctrl` + `Up` / `Down` | Previous / next paragraph |
+| `Ctrl` + `T` / `Ctrl` + `W` | New tab / close tab |
+| `Ctrl` + `Tab` | Next / previous tab |
 | `Ctrl` + `F` | Find in text |
+| `F1` or `?` | Keyboard-shortcuts help |
 | Media Play/Pause/Stop, Bluetooth headset controls | Full MediaSession support |
 
 ## Architecture (short version)

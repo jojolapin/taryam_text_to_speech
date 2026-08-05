@@ -101,6 +101,16 @@ const BridgeAPI = (() => {
       pending.delete(id);
       p.reject(new Error(msg));
     });
+    bridge.smartToolReady.connect((id, textOut) => {
+      const p = pending.get(id); if (!p) return;
+      pending.delete(id);
+      p.resolve(textOut);
+    });
+    bridge.smartToolError.connect((id, msg) => {
+      const p = pending.get(id); if (!p) return;
+      pending.delete(id);
+      p.reject(new Error(msg));
+    });
     bridge.exportProgress.connect((id, stage, ratio) => {
       exportListeners.forEach(fn => fn({ id, type: 'progress', stage, ratio }));
     });
@@ -152,14 +162,14 @@ const BridgeAPI = (() => {
         bridge.synthesize(text, voice, lengthScale, volume, id, textFormat || 'plain');
       });
     },
-    synthesizeOpenAI(text, { voice, model, speed, instructions, format, textFormat } = {}) {
+    synthesizeOpenAI(text, { voice, model, speed, instructions, format, textFormat, tabId } = {}) {
       const id = nextId('oa');
       openaiPending.add(id);
       const p = new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         bridge.synthesize_openai(
           text, voice || '', model || '', Number(speed) || 1.0,
-          instructions || '', format || '', textFormat || 'plain', id
+          instructions || '', format || '', textFormat || 'plain', tabId || '', id
         );
       });
       return p.finally(() => openaiPending.delete(id));
@@ -182,12 +192,42 @@ const BridgeAPI = (() => {
       bridge.export_audio(text, voice, fmt, lengthScale, volume, bitrate, author || '', suggestedName || '', id, textFormat || 'plain');
       return id;
     },
+    exportOpenAI(text, { voice, model, speed, instructions, format, author, suggestedName, textFormat, tabId } = {}) {
+      const id = nextId('eo');
+      bridge.export_openai(
+        text, voice || '', model || '', Number(speed) || 1.0,
+        instructions || '', format || 'mp3', author || '', suggestedName || '',
+        textFormat || 'plain', tabId || '', id
+      );
+      return id;
+    },
     batchExport(paragraphs, voice, fmt, lengthScale, volume, bitrate, author, prefix, textFormat) {
       const id = nextId('b');
       bridge.batch_export(JSON.stringify(paragraphs), voice, fmt, lengthScale, volume, bitrate, author || '', prefix || 'part', id, textFormat || 'plain');
       return id;
     },
     onExport(fn) { exportListeners.add(fn); return () => exportListeners.delete(fn); },
+
+    cacheStats() { return bridge.cache_stats().then(JSON.parse); },
+    clearAudioCache(provider, tabId) {
+      return bridge.clear_audio_cache(provider || '', tabId || '').then(JSON.parse);
+    },
+
+    // Pronunciation (non-destructive spoken-text substitutions)
+    setPronunciationRules(rules) { return bridge.set_pronunciation_rules(JSON.stringify(rules || [])); },
+    previewPronunciation(text, rules, textFormat) {
+      return bridge.preview_pronunciation(text || '', JSON.stringify(rules || []), textFormat || 'auto').then(JSON.parse);
+    },
+    // Speaking-style presets (OpenAI delivery)
+    speakingStyles() { return bridge.speaking_styles().then(JSON.parse); },
+    // Smart tools (text -> text; opens result in a new tab)
+    smartTool(text, task, targetLang) {
+      const id = nextId('st');
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        bridge.smart_tool(text || '', task || '', targetLang || '', id);
+      });
+    },
 
     catalogList() { return bridge.catalog_list().then(JSON.parse); },
     catalogRefresh() {
@@ -315,7 +355,8 @@ const Tabs = (() => {
     doc.speed = parseFloat($('#rateSlider').value) || 1;
     doc.volume = parseFloat($('#volumeSlider').value);
     if ($('#engineSelect')) doc.provider = $('#engineSelect').value || 'piper';
-    if ($('#openaiInstructions')) doc.speakingStyle = $('#openaiInstructions').value || null;
+    if ($('#openaiStyle') && $('#openaiStyle').value) doc.speakingStyle = $('#openaiStyle').value;
+    if ($('#openaiInstructions')) doc.speakingInstructions = $('#openaiInstructions').value || '';
     doc.bookmarks = Array.isArray(BOOKMARKS) ? BOOKMARKS.slice() : [];
     if (playingTabId === doc.id && reader._currentCharIndex) {
       try { doc.playbackPosition = reader._currentCharIndex(); } catch {}
@@ -345,8 +386,13 @@ const Tabs = (() => {
     clearHighlight();
     $('#progressFill').style.width = '0%';
     $('#chunkProgress').textContent = '0 / 0';
+    resetTransportClock();
     try { input.setSelectionRange(doc.selStart || 0, doc.selEnd || 0); } catch {}
     input.scrollTop = doc.scrollTop || 0;
+    // Push this document's effective pronunciation rules (global + per-doc) so
+    // the backend narrates it correctly, and refresh the drawer editor if open.
+    pushPronunciationRules();
+    if (typeof syncPronunciationEditor === 'function') syncPronunciationEditor();
   }
 
   // Stop any playback belonging to the current tab (no stale audio survives).
@@ -354,6 +400,7 @@ const Tabs = (() => {
     reader.stop();
     clearHighlight();
     $('#progressFill').style.width = '0%';
+    resetTransportClock();
     playingTabId = null;
   }
 
@@ -376,6 +423,21 @@ const Tabs = (() => {
     render();
     scheduleSave();
     $('#input').focus();
+  }
+
+  // Create a new tab pre-filled with text (used by smart tools). Never mutates
+  // the source document.
+  function newTabWith(text, title) {
+    captureInto(store.active());
+    const doc = store.create(Object.assign(_defaultsForNewDoc(), {
+      text: text || '', title: title || '',
+    }));
+    stopPlaybackForSwitch();
+    loadIntoEditor(doc);
+    render();
+    scheduleSave();
+    $('#input').focus();
+    return doc;
   }
 
   function duplicateTab(id) {
@@ -428,7 +490,8 @@ const Tabs = (() => {
     doc.volume = parseFloat($('#volumeSlider').value);
     doc.markdownMode = MarkdownMode.mode;
     if ($('#engineSelect')) doc.provider = $('#engineSelect').value || 'piper';
-    if ($('#openaiInstructions')) doc.speakingStyle = $('#openaiInstructions').value || null;
+    if ($('#openaiStyle') && $('#openaiStyle').value) doc.speakingStyle = $('#openaiStyle').value;
+    if ($('#openaiInstructions')) doc.speakingInstructions = $('#openaiInstructions').value || '';
     scheduleSave();
   }
 
@@ -572,7 +635,7 @@ const Tabs = (() => {
   }
 
   return {
-    init, render, newTab, duplicateTab, closeTab, switchTo, nextTab,
+    init, render, newTab, newTabWith, duplicateTab, closeTab, switchTo, nextTab,
     activeDoc, scheduleSave, reflectState, reflectGenerating,
     onEditorInput, onEditorCaret, onControlsChanged, toggleOverflow, closeOverflow,
     get isReady() { return ready; },
@@ -708,6 +771,8 @@ function applyLang(pref) {
   renderPresets();
   renderCatalog();
   MarkdownMode.updatePill();
+  if (typeof populateStyleSelect === 'function') populateStyleSelect();
+  if (typeof syncPronunciationEditor === 'function') syncPronunciationEditor();
 }
 
 /* ---------- Voices ---------- */
@@ -828,11 +893,17 @@ function applyEngineUI(pid) {
   if (engineSel && engineSel.value !== pid) engineSel.value = pid;
   const isOpenAI = pid === 'openai';
   const panel = $('#openaiPanel'); if (panel) panel.hidden = !isOpenAI;
+  const batchBtn = $('#batchExportBtn');
+  if (batchBtn) batchBtn.hidden = isOpenAI;
+  const oggOpt = $('#exportFormat option[value="ogg"]');
+  if (oggOpt) oggOpt.hidden = isOpenAI;
   populateVoiceSelect();
   if (isOpenAI) {
     const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+    const styleSel = $('#openaiStyle');
+    if (styleSel && document.activeElement !== styleSel) styleSel.value = (doc && doc.speakingStyle) || 'neutral';
     const instr = $('#openaiInstructions');
-    if (instr && document.activeElement !== instr) instr.value = (doc && doc.speakingStyle) || '';
+    if (instr && document.activeElement !== instr) instr.value = (doc && doc.speakingInstructions) || '';
     if (OPENAI_STATUS) {
       const m = $('#openaiModel');
       if (m && OPENAI_STATUS.models && OPENAI_STATUS.models.includes(OPENAI_STATUS.model)) m.value = OPENAI_STATUS.model;
@@ -886,12 +957,20 @@ function getOpts() {
   if (providerId === 'openai') {
     opts.providerOptions = {
       model: (OPENAI_STATUS && OPENAI_STATUS.model) || 'gpt-4o-mini-tts',
-      instructions: ($('#openaiInstructions') && $('#openaiInstructions').value) || '',
+      instructions: resolveSpeakingInstructions(),
       format: (OPENAI_STATUS && OPENAI_STATUS.format) || 'mp3',
+      tabId: (doc && doc.id) || '',
     };
-    // Larger, boundary-aware sections for online synthesis (fewer API calls,
-    // never split a decimal/date/URL/etc). Well under OpenAI's input limit.
-    if (typeof SemanticChunker !== 'undefined') { opts.chunker = SemanticChunker; opts.maxChars = 1600; }
+    // Boundary-aware sections for online synthesis (never split a
+    // decimal/date/URL/etc). OpenAI TTS is billed per character, not per
+    // request, so smaller sections cost the same while re-anchoring the
+    // highlight ~2x more often (less accumulated drift within a section).
+    if (typeof SemanticChunker !== 'undefined') { opts.chunker = SemanticChunker; opts.maxChars = 900; }
+  } else {
+    // Piper is local: smaller chunks are effectively free and keep the
+    // highlight re-anchored to real audio boundaries more often, so the
+    // estimate-based marker can't drift far before it re-syncs.
+    opts.maxChars = 260;
   }
   return opts;
 }
@@ -928,32 +1007,379 @@ function updateButtons(state) {
   $('#restartBtn').disabled = !active;
   $('#skipBack').disabled = !active;
   $('#skipForward').disabled = !active;
+  ['#prevSent', '#nextSent', '#prevPara', '#nextPara'].forEach(id => {
+    const el = $(id); if (el) el.disabled = !active;
+  });
 }
 
-/* ---------- Highlight ---------- */
+/* ---------- Highlight (sentence + word; auto-scroll when needed) ---------- */
+let _hlSentenceStart = -1;
+let _hlWordStart = -1;
+let _hlWordEnd = -1;
+let _lastSavedPosAt = 0;
 function updateHighlight(pos) {
   if (!$('#hlToggle').checked) return;
   const text = $('#input').value;
   pos = Math.max(0, Math.min(pos, text.length));
-  let left = pos, right = pos;
-  while (left > 0 && /[\w\u00C0-\u017F'-]/.test(text[left - 1])) left--;
-  while (right < text.length && /[\w\u00C0-\u017F'-]/.test(text[right])) right++;
+  const Nav = (typeof TextNav !== 'undefined') ? TextNav : null;
+  const sent = Nav ? Nav.sentenceAt(text, pos) : { start: pos, end: pos };
+  const word = Nav ? Nav.wordAt(text, pos) : (() => {
+    let left = pos, right = pos;
+    while (left > 0 && /[\w\u00C0-\u017F'-]/.test(text[left - 1])) left--;
+    while (right < text.length && /[\w\u00C0-\u017F'-]/.test(text[right])) right++;
+    return { start: left, end: right };
+  })();
+  // Clamp word inside sentence for nested marks
+  const ws = Math.max(sent.start, Math.min(word.start, sent.end));
+  const we = Math.max(ws, Math.min(word.end, sent.end));
+
+  // Skip the (relatively expensive) full innerHTML rewrite when nothing moved.
+  // This keeps the requestAnimationFrame ticker cheap for large documents.
+  if (ws === _hlWordStart && we === _hlWordEnd && sent.start === _hlSentenceStart) return;
+  _hlWordStart = ws; _hlWordEnd = we;
+
+  const before = escapeHtml(text.slice(0, sent.start));
+  const sentBefore = escapeHtml(text.slice(sent.start, ws));
+  const wordHtml = '<mark class="hl">' + (escapeHtml(text.slice(ws, we)) || '&nbsp;') + '</mark>';
+  const sentAfter = escapeHtml(text.slice(we, sent.end));
+  const after = escapeHtml(text.slice(sent.end));
   $('#render').innerHTML =
-    escapeHtml(text.slice(0, left)) +
-    '<mark class="hl">' + (escapeHtml(text.slice(left, right)) || '&nbsp;') + '</mark>' +
-    escapeHtml(text.slice(right));
-  if ($('#autoScroll').checked) {
-    const mark = $('#render').querySelector('.hl');
-    if (mark) mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    before +
+    '<mark class="hl-sent">' + sentBefore + wordHtml + sentAfter + '</mark>' +
+    after;
+
+  const panel = $('#render');
+  const mark = panel.querySelector('.hl') || panel.querySelector('.hl-sent');
+  const sentenceChanged = sent.start !== _hlSentenceStart;
+  _hlSentenceStart = sent.start;
+  if ($('#autoScroll').checked && mark) {
+    if (sentenceChanged || !_isMarkInView(panel, mark)) {
+      mark.scrollIntoView({ behavior: sentenceChanged ? 'smooth' : 'auto', block: 'center' });
+    }
   }
 }
-function clearHighlight() { if ($('#hlToggle').checked) $('#render').textContent = $('#input').value; }
+function _isMarkInView(panel, mark) {
+  if (!panel || !mark) return true;
+  const pr = panel.getBoundingClientRect();
+  const mr = mark.getBoundingClientRect();
+  return mr.top >= pr.top + 8 && mr.bottom <= pr.bottom - 8;
+}
+function clearHighlight() {
+  _hlSentenceStart = -1;
+  _hlWordStart = -1;
+  _hlWordEnd = -1;
+  if ($('#hlToggle').checked) $('#render').textContent = $('#input').value;
+}
+function resetTransportClock() {
+  const el = $('#timeElapsed'); if (el) el.textContent = '0:00';
+  const rem = $('#timeRemaining'); if (rem) rem.textContent = '-0:00';
+  const track = $('#progressTrack'); if (track) track.setAttribute('aria-valuenow', '0');
+}
+function updateTransportClock(elapsedSec, remainingSec, ratio) {
+  const Nav = (typeof TextNav !== 'undefined') ? TextNav : null;
+  const fmt = Nav && Nav.formatClock ? Nav.formatClock : (s) => {
+    s = Math.max(0, Math.round(s || 0));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
+  const el = $('#timeElapsed'); if (el) el.textContent = fmt(elapsedSec || 0);
+  const rem = $('#timeRemaining'); if (rem) rem.textContent = '-' + fmt(remainingSec || 0);
+  const track = $('#progressTrack');
+  if (track) track.setAttribute('aria-valuenow', String(Math.round((ratio || 0) * 100)));
+}
 
 /* ---------- Drawers ---------- */
 function closeAllDrawers() { $$('.drawer').forEach(d => d.classList.remove('open')); }
 function openDrawer(id) {
   closeAllDrawers();
   $('#' + id).classList.add('open');
+  if (id === 'drawerSettings') { refreshCacheStats(); syncPronunciationEditor(); }
+}
+
+/* =======================================================================
+   Speaking styles (Phase 7) — OpenAI delivery presets
+======================================================================= */
+let SPEAKING_STYLES = { default: 'neutral', presets: [] };
+
+function _styleLabel(preset) {
+  const lang = (I18N && I18N.lang) || 'en';
+  return (lang === 'fr' ? preset.label_fr : preset.label_en) || preset.id;
+}
+
+async function loadSpeakingStyles() {
+  try { SPEAKING_STYLES = await BridgeAPI.speakingStyles(); }
+  catch { SPEAKING_STYLES = { default: 'neutral', presets: [{ id: 'neutral', label_en: 'Neutral', label_fr: 'Neutre', instructions: '' }] }; }
+  populateStyleSelect();
+}
+
+function populateStyleSelect() {
+  const sel = $('#openaiStyle');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  (SPEAKING_STYLES.presets || []).forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = _styleLabel(p);
+    sel.appendChild(opt);
+  });
+  const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+  sel.value = prev || (doc && doc.speakingStyle) || SPEAKING_STYLES.default || 'neutral';
+}
+
+// Resolve the instruction string sent to OpenAI: a non-empty custom override
+// always wins; otherwise the selected preset's canned instruction is used.
+function resolveSpeakingInstructions() {
+  const custom = ($('#openaiInstructions') && $('#openaiInstructions').value || '').trim();
+  if (custom) return custom;
+  const styleId = ($('#openaiStyle') && $('#openaiStyle').value) || 'neutral';
+  const preset = (SPEAKING_STYLES.presets || []).find(p => p.id === styleId);
+  return (preset && preset.instructions) || '';
+}
+
+/* =======================================================================
+   Pronunciation (Phase 7) — non-destructive spoken-text substitutions
+======================================================================= */
+function _globalPronRules() {
+  try {
+    const raw = (PREFS && PREFS.pronunciation_rules) || '[]';
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+function _docPronRules() {
+  const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+  return (doc && Array.isArray(doc.pronunciationRules)) ? doc.pronunciationRules : [];
+}
+
+// Merge global + per-document rules (document rules run last so they win) and
+// push them to the backend so playback/export narrate correctly.
+function pushPronunciationRules() {
+  const merged = _globalPronRules().concat(_docPronRules());
+  try { BridgeAPI.setPronunciationRules(merged); } catch {}
+  refreshPronPreview();
+}
+
+function _currentScope() {
+  const sel = $('#pronScope');
+  return (sel && sel.value) === 'doc' ? 'doc' : 'global';
+}
+function _rulesForScope(scope) {
+  return scope === 'doc' ? _docPronRules() : _globalPronRules();
+}
+function _saveRulesForScope(scope, rules) {
+  if (scope === 'doc') {
+    const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+    if (doc) { doc.pronunciationRules = rules; Tabs.onControlsChanged(); }
+  } else {
+    if (PREFS) PREFS.pronunciation_rules = JSON.stringify(rules);
+    try { BridgeAPI.setPref('pronunciation_rules', JSON.stringify(rules)); } catch {}
+  }
+  pushPronunciationRules();
+}
+
+function _newRule() {
+  return { from: '', to: '', whole_word: true, match_case: false, is_regex: false, enabled: true };
+}
+
+// Render the rule editor for the currently selected scope.
+function syncPronunciationEditor() {
+  const list = $('#pronList');
+  if (!list) return;
+  const scope = _currentScope();
+  const rules = _rulesForScope(scope);
+  list.innerHTML = '';
+  if (!rules.length) {
+    const empty = document.createElement('div');
+    empty.className = 'pron-empty';
+    empty.textContent = I18N.t('settings.pron.empty');
+    list.appendChild(empty);
+  }
+  rules.forEach((rule, idx) => list.appendChild(_renderPronRule(scope, rule, idx)));
+  refreshPronPreview();
+}
+
+function _renderPronRule(scope, rule, idx) {
+  const row = document.createElement('div');
+  row.className = 'pron-rule';
+
+  const from = document.createElement('input');
+  from.type = 'text'; from.value = rule.from || '';
+  from.placeholder = I18N.t('settings.pron.from');
+  from.addEventListener('input', () => { rule.from = from.value; _commitScope(scope); });
+
+  const to = document.createElement('input');
+  to.type = 'text'; to.value = rule.to || '';
+  to.placeholder = I18N.t('settings.pron.to');
+  to.addEventListener('input', () => { rule.to = to.value; _commitScope(scope); });
+
+  const del = document.createElement('button');
+  del.className = 'pron-del'; del.type = 'button';
+  del.title = I18N.t('settings.pron.delete');
+  del.textContent = '\u2715';
+  del.addEventListener('click', () => {
+    const rules = _rulesForScope(scope); rules.splice(idx, 1);
+    _saveRulesForScope(scope, rules); syncPronunciationEditor();
+  });
+
+  const flags = document.createElement('div');
+  flags.className = 'pron-flags';
+  flags.appendChild(_flag('settings.pron.enabled', rule.enabled !== false, (v) => { rule.enabled = v; _commitScope(scope); }));
+  flags.appendChild(_flag('settings.pron.wholeword', rule.whole_word !== false, (v) => { rule.whole_word = v; _commitScope(scope); }));
+  flags.appendChild(_flag('settings.pron.case', !!rule.match_case, (v) => { rule.match_case = v; _commitScope(scope); }));
+  flags.appendChild(_flag('settings.pron.regex', !!rule.is_regex, (v) => { rule.is_regex = v; _commitScope(scope); }));
+
+  row.appendChild(from); row.appendChild(to); row.appendChild(del); row.appendChild(flags);
+  return row;
+}
+
+function _flag(labelKey, checked, onChange) {
+  const label = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.checked = checked;
+  cb.addEventListener('change', () => onChange(cb.checked));
+  const span = document.createElement('span');
+  span.textContent = I18N.t(labelKey);
+  label.appendChild(cb); label.appendChild(span);
+  return label;
+}
+
+// Debounced persist of the in-place edits for the active scope.
+let _pronCommitTimer = null;
+function _commitScope(scope) {
+  clearTimeout(_pronCommitTimer);
+  _pronCommitTimer = setTimeout(() => _saveRulesForScope(scope, _rulesForScope(scope)), 300);
+}
+
+let _pronPreviewTimer = null;
+function refreshPronPreview() {
+  const out = $('#pronPreviewOut');
+  const inp = $('#pronPreviewIn');
+  if (!out || !inp) return;
+  const text = inp.value;
+  if (!text.trim()) { out.textContent = ''; return; }
+  clearTimeout(_pronPreviewTimer);
+  _pronPreviewTimer = setTimeout(async () => {
+    try {
+      const merged = _globalPronRules().concat(_docPronRules());
+      const res = await BridgeAPI.previewPronunciation(text, merged, MarkdownMode.effective || 'auto');
+      out.textContent = res.spoken || '';
+    } catch { out.textContent = ''; }
+  }, 250);
+}
+
+/* =======================================================================
+   Smart tools (Phase 7) — AI text transforms into a new tab
+======================================================================= */
+let _smartTask = 'clean';
+let _smartResultText = '';
+
+function openSmartTools() {
+  if (!(OPENAI_STATUS && OPENAI_STATUS.configured)) {
+    toast(I18N.t('smart.needKey'), 'error');
+    openDrawer('drawerSettings');
+    return;
+  }
+  _smartResultText = '';
+  $('#smartResult').value = '';
+  $('#smartAccept').disabled = true;
+  $('#smartStatus').textContent = '';
+  _setSmartTask(_smartTask);
+  $('#smartOverlay').classList.add('visible');
+  const runBtn = $('#smartRun'); if (runBtn) runBtn.focus();
+}
+function closeSmartTools() { $('#smartOverlay').classList.remove('visible'); }
+
+function _setSmartTask(task) {
+  _smartTask = task;
+  $$('#smartTasks .btn').forEach(b => b.classList.toggle('active', b.dataset.task === task));
+  const langRow = $('#smartLangRow');
+  if (langRow) langRow.hidden = task !== 'translate';
+}
+
+async function runSmartTool() {
+  const text = $('#input').value;
+  if (!text.trim()) { toast(I18N.t('toast.noText')); return; }
+  const targetLang = ($('#smartLang') && $('#smartLang').value || '').trim();
+  if (_smartTask === 'translate' && !targetLang) { toast(I18N.t('smart.needLang'), 'error'); $('#smartLang').focus(); return; }
+
+  const runBtn = $('#smartRun');
+  runBtn.disabled = true;
+  $('#smartAccept').disabled = true;
+  $('#smartStatus').textContent = I18N.t('smart.working');
+  try {
+    const out = await BridgeAPI.smartTool(text, _smartTask, targetLang);
+    _smartResultText = out || '';
+    $('#smartResult').value = _smartResultText;
+    $('#smartAccept').disabled = !_smartResultText.trim();
+    $('#smartStatus').textContent = I18N.t('smart.done');
+  } catch (e) {
+    $('#smartStatus').textContent = (e && e.message) ? e.message : I18N.t('smart.failed');
+    toast((e && e.message) || I18N.t('smart.failed'), 'error', 4000);
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+/* =======================================================================
+   Keyboard shortcuts help (Phase 8)
+======================================================================= */
+function toggleShortcutsHelp() {
+  const ov = $('#shortcutsOverlay');
+  if (!ov) return;
+  const showing = ov.classList.toggle('visible');
+  if (showing) { const btn = $('#shortcutsClose'); if (btn) btn.focus(); }
+}
+
+function acceptSmartResult() {
+  const out = _smartResultText.trim();
+  if (!out) return;
+  const titleMap = {
+    clean: I18N.t('smart.task.clean'),
+    summarize: I18N.t('smart.task.summarize'),
+    explain: I18N.t('smart.task.explain'),
+    translate: I18N.t('smart.task.translate'),
+  };
+  const label = titleMap[_smartTask] || 'AI';
+  Tabs.newTabWith(out, `${label}`);
+  closeSmartTools();
+  toast(I18N.t('smart.opened'), 'success');
+}
+
+function formatBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function refreshCacheStats() {
+  const el = $('#cacheSizeLabel');
+  if (!el) return;
+  try {
+    const s = await BridgeAPI.cacheStats();
+    const openai = (s.byProvider && s.byProvider.openai) || { bytes: 0, count: 0 };
+    const piper = (s.byProvider && s.byProvider.piper) || { bytes: 0, count: 0 };
+    el.textContent = I18N.t('settings.cache.size', {
+      total: formatBytes(s.totalBytes || 0),
+      openai: formatBytes(openai.bytes || 0),
+      piper: formatBytes(piper.bytes || s.sampleBytes || 0),
+    });
+  } catch (e) {
+    el.textContent = I18N.t('settings.cache.sizeUnknown');
+  }
+}
+
+async function clearCache(provider, tabId) {
+  try {
+    const res = await BridgeAPI.clearAudioCache(provider || '', tabId || '');
+    await refreshCacheStats();
+    toast(I18N.t('settings.cache.cleared', {
+      count: res.removedCount || 0,
+      size: formatBytes(res.removedBytes || 0),
+    }), 'success');
+  } catch (e) {
+    toast(I18N.t('settings.cache.clearFailed'), 'error');
+  }
 }
 
 /* ---------- Status ---------- */
@@ -1080,9 +1506,11 @@ function formatDuration(seconds) {
   const m = Math.floor(seconds / 60), s = seconds % 60;
   return m + 'm ' + String(s).padStart(2, '0') + 's';
 }
-function openExportOverlay(chars, rate) {
+function openExportOverlay(chars, rate, { openai = false } = {}) {
   $('#exportTitle').textContent = I18N.t('export.title');
-  $('#exportSubtitle').textContent = I18N.t('export.synth', { chars: chars.toLocaleString() });
+  $('#exportSubtitle').textContent = I18N.t(openai ? 'export.synth.openai' : 'export.synth', {
+    chars: chars.toLocaleString(),
+  });
   const eta = Math.max(3, Math.round((chars / (15 * rate)) / 10));
   $('#exportEta').textContent = '~' + formatDuration(eta);
   $('#exportElapsed').textContent = '0s';
@@ -1121,16 +1549,51 @@ BridgeAPI.onExport(evt => {
 });
 
 function doExport(batch) {
-  const text = $('#input').value;
-  if (!text.trim()) { toast(I18N.t('toast.noText')); return; }
+  const input = $('#input');
+  const full = input.value;
+  if (!full.trim()) { toast(I18N.t('toast.noText')); return; }
+  // Prefer a non-empty selection (full + selection for OpenAI; Piper same UX).
+  const selStart = input.selectionStart || 0;
+  const selEnd = input.selectionEnd || 0;
+  const selected = selEnd > selStart ? full.slice(selStart, selEnd) : '';
+  const text = (selected && selected.trim()) ? selected : full;
+  const usingSelection = text !== full;
+
+  const providerId = currentProviderId();
   const voice = $('#voiceSelect').value;
-  if (!AVAILABLE_VOICES.some(v => v.id === voice)) { toast(I18N.t('toast.noVoice'), 'error'); return; }
   const rate = parseFloat($('#rateSlider').value) || 1;
   const volume = parseFloat($('#volumeSlider').value) || 1;
   const fmt = $('#exportFormat').value;
   const bitrate = parseInt($('#exportBitrate').value, 10) || 128;
   const author = (PREFS && PREFS.id3_author) || '';
   const textFmt = MarkdownMode.effective;
+  const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+  const tabId = (doc && doc.id) || '';
+
+  if (providerId === 'openai') {
+    if (!(OPENAI_STATUS && OPENAI_STATUS.configured)) { toast(I18N.t('openai.needKey'), 'error'); return; }
+    if (!voice) { toast(I18N.t('toast.noVoice'), 'error'); return; }
+    if (batch) { toast(I18N.t('exp.batch.openaiUnavailable'), 'info'); return; }
+    $('#downloadAudioBtn').disabled = true; $('#batchExportBtn').disabled = true;
+    Tabs.reflectGenerating(true);
+    openExportOverlay(text.length, rate, { openai: true });
+    const suggested = generateAudioFilename(text, fmt === 'wav' ? 'wav' : 'mp3');
+    exportActiveId = BridgeAPI.exportOpenAI(text, {
+      voice,
+      model: (OPENAI_STATUS && OPENAI_STATUS.model) || 'gpt-4o-mini-tts',
+      speed: rate,
+      instructions: resolveSpeakingInstructions(),
+      format: fmt === 'wav' ? 'wav' : 'mp3',
+      author,
+      suggestedName: suggested,
+      textFormat: textFmt,
+      tabId,
+    });
+    if (usingSelection) toast(I18N.t('exp.selection'), 'info');
+    return;
+  }
+
+  if (!AVAILABLE_VOICES.some(v => v.id === voice)) { toast(I18N.t('toast.noVoice'), 'error'); return; }
   $('#downloadAudioBtn').disabled = true; $('#batchExportBtn').disabled = true;
   Tabs.reflectGenerating(true);
   openExportOverlay(text.length, rate);
@@ -1141,6 +1604,7 @@ function doExport(batch) {
     const suggested = generateAudioFilename(text, fmt);
     exportActiveId = BridgeAPI.exportAudio(text, voice, fmt, 1.0 / rate, volume, bitrate, author, suggested, textFmt);
   }
+  if (usingSelection) toast(I18N.t('exp.selection'), 'info');
 }
 
 /* ---------- Voice catalog ---------- */
@@ -1515,10 +1979,16 @@ async function boot() {
   // OpenAI document can restore its engine UI correctly.
   await refreshOpenAIStatus();
 
+  // Speaking-style presets (populates the OpenAI style dropdown).
+  await loadSpeakingStyles();
+
   // Multi-document workspace: restore tabs from IndexedDB, or migrate the
   // legacy single-document state. Must run after voices load so per-tab voice
   // selections can be applied.
   await Tabs.init();
+
+  // Seed the backend with the active document's effective pronunciation rules.
+  pushPronunciationRules();
 
   updateStats();
   setStatus('ready');
@@ -1574,10 +2044,33 @@ function wireUI() {
   $('#playFromCursor').addEventListener('click', () => doPlay($('#input').selectionStart || 0));
   $('#pauseBtn').addEventListener('click', () => reader.pause());
   $('#resumeBtn').addEventListener('click', () => reader.resume());
-  $('#stopBtn').addEventListener('click', () => { reader.stop(); clearHighlight(); $('#progressFill').style.width = '0%'; });
+  $('#stopBtn').addEventListener('click', () => {
+    reader.stop(); clearHighlight(); $('#progressFill').style.width = '0%'; resetTransportClock();
+  });
   $('#restartBtn').addEventListener('click', () => { clearHighlight(); doPlay(0); });
   $('#skipBack').addEventListener('click', () => reader.skip(-10));
   $('#skipForward').addEventListener('click', () => reader.skip(10));
+  $('#prevSent').addEventListener('click', () => reader.skipSentence(-1));
+  $('#nextSent').addEventListener('click', () => reader.skipSentence(1));
+  $('#prevPara').addEventListener('click', () => reader.skipParagraph(-1));
+  $('#nextPara').addEventListener('click', () => reader.skipParagraph(1));
+
+  // Click / keyboard seek on the progress track
+  const progressTrack = $('#progressTrack');
+  function seekFromClientX(clientX) {
+    if (!['playing', 'paused'].includes(reader.state)) return;
+    const rect = progressTrack.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    const total = Math.max(1, (reader.text || '').length);
+    reader.seekToChar(Math.floor(ratio * total));
+  }
+  progressTrack.addEventListener('click', (e) => seekFromClientX(e.clientX));
+  progressTrack.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); reader.skip(-5); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); reader.skip(5); }
+    if (e.key === 'Home') { e.preventDefault(); reader.seekToChar(0); }
+    if (e.key === 'End') { e.preventDefault(); reader.seekToChar((reader.text || '').length - 1); }
+  });
 
   // Sliders
   $('#rateSlider').addEventListener('input', () => {
@@ -1622,7 +2115,38 @@ function wireUI() {
     const def = $('#openaiModelDefault'); if (def) def.value = v;
   });
   $('#openaiInstructions').addEventListener('input', () => { Tabs.onControlsChanged(); });
+  if ($('#openaiStyle')) $('#openaiStyle').addEventListener('change', () => { Tabs.onControlsChanged(); });
   $('#openaiOpenSettings').addEventListener('click', () => { openDrawer('drawerSettings'); });
+
+  // Pronunciation editor (settings drawer)
+  if ($('#pronScope')) $('#pronScope').addEventListener('change', syncPronunciationEditor);
+  if ($('#pronAddBtn')) $('#pronAddBtn').addEventListener('click', () => {
+    const scope = _currentScope();
+    const rules = _rulesForScope(scope).slice();
+    rules.push(_newRule());
+    _saveRulesForScope(scope, rules);
+    syncPronunciationEditor();
+  });
+  if ($('#pronPreviewIn')) $('#pronPreviewIn').addEventListener('input', refreshPronPreview);
+
+  // Smart tools
+  if ($('#chipSmart')) $('#chipSmart').addEventListener('click', openSmartTools);
+  if ($('#smartTasks')) $('#smartTasks').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-task]'); if (btn) _setSmartTask(btn.dataset.task);
+  });
+  if ($('#smartRun')) $('#smartRun').addEventListener('click', runSmartTool);
+  if ($('#smartAccept')) $('#smartAccept').addEventListener('click', acceptSmartResult);
+  if ($('#smartClose')) $('#smartClose').addEventListener('click', closeSmartTools);
+  if ($('#smartOverlay')) $('#smartOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'smartOverlay') closeSmartTools();
+  });
+
+  // Keyboard shortcuts help dialog
+  if ($('#shortcutsHelpBtn')) $('#shortcutsHelpBtn').addEventListener('click', toggleShortcutsHelp);
+  if ($('#shortcutsClose')) $('#shortcutsClose').addEventListener('click', () => $('#shortcutsOverlay').classList.remove('visible'));
+  if ($('#shortcutsOverlay')) $('#shortcutsOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'shortcutsOverlay') e.currentTarget.classList.remove('visible');
+  });
 
   // Settings drawer: OpenAI key + defaults
   $('#openaiKeySave').addEventListener('click', async () => {
@@ -1650,6 +2174,14 @@ function wireUI() {
     BridgeAPI.setPref('openai_base_url', ($('#openaiBaseUrl').value || '').trim());
     await refreshOpenAIStatus();
   });
+  $('#clearOpenAICacheBtn').addEventListener('click', () => clearCache('openai'));
+  $('#clearPiperCacheBtn').addEventListener('click', () => clearCache('piper'));
+  $('#clearTabCacheBtn').addEventListener('click', () => {
+    const doc = (typeof Tabs !== 'undefined' && Tabs.isReady) ? Tabs.activeDoc() : null;
+    if (!doc || !doc.id) { toast(I18N.t('settings.cache.noTab'), 'info'); return; }
+    clearCache('', doc.id);
+  });
+  $('#clearAllCacheBtn').addEventListener('click', () => clearCache('all'));
   $$('.preset').forEach(btn => btn.addEventListener('click', () => {
     $('#rateSlider').value = btn.dataset.speed;
     $('#rateSlider').dispatchEvent(new Event('input'));
@@ -1815,6 +2347,10 @@ function wireUI() {
 
   // Find
   document.addEventListener('keydown', e => {
+    // Keyboard shortcuts help: F1, or "?" when not typing in a field.
+    if (e.key === 'F1' || (e.key === '?' && !isInInput(document.activeElement))) {
+      e.preventDefault(); toggleShortcutsHelp(); return;
+    }
     if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
       e.preventDefault();
       $('#findBar').classList.add('visible');
@@ -1830,6 +2366,8 @@ function wireUI() {
     if (e.ctrlKey && e.key === 'PageDown') { e.preventDefault(); Tabs.nextTab(1); return; }
     if (e.ctrlKey && e.key === 'PageUp') { e.preventDefault(); Tabs.nextTab(-1); return; }
     if (e.key === 'Escape') {
+      if ($('#shortcutsOverlay').classList.contains('visible')) { $('#shortcutsOverlay').classList.remove('visible'); return; }
+      if ($('#smartOverlay').classList.contains('visible')) { closeSmartTools(); return; }
       if ($('#findBar').classList.contains('visible')) { $('#findBar').classList.remove('visible'); return; }
       if (document.querySelectorAll('.drawer.open').length) { closeAllDrawers(); return; }
       if ($('#aboutOverlay').classList.contains('visible')) { $('#aboutOverlay').classList.remove('visible'); return; }
@@ -1845,6 +2383,10 @@ function wireUI() {
     if (document.activeElement !== $('#input') && !isInInput(document.activeElement)) {
       if (e.key === 'ArrowLeft')  { e.preventDefault(); $('#skipBack').click(); }
       if (e.key === 'ArrowRight') { e.preventDefault(); $('#skipForward').click(); }
+      if (e.key === '[') { e.preventDefault(); $('#prevSent').click(); }
+      if (e.key === ']') { e.preventDefault(); $('#nextSent').click(); }
+      if (e.ctrlKey && e.key === 'ArrowUp') { e.preventDefault(); $('#prevPara').click(); }
+      if (e.ctrlKey && e.key === 'ArrowDown') { e.preventDefault(); $('#nextPara').click(); }
     }
   });
   $('#findInput').addEventListener('input', () => doFind($('#findInput').value));
@@ -1878,14 +2420,26 @@ function wireUI() {
     $('#progressFill').classList.toggle('shimmer', state === 'loading');
     if (state === 'done') toast(I18N.t('toast.readingComplete'), 'success');
   });
-  reader.on('progress', ({ charIndex, totalChars, chunkIdx, totalChunks }) => {
-    if (totalChars > 0) $('#progressFill').style.width = (charIndex / totalChars * 100).toFixed(1) + '%';
+  reader.on('progress', ({ charIndex, totalChars, chunkIdx, totalChunks, elapsedSec, remainingSec }) => {
+    const ratio = totalChars > 0 ? charIndex / totalChars : 0;
+    if (totalChars > 0) $('#progressFill').style.width = (ratio * 100).toFixed(1) + '%';
     const n = Math.min(chunkIdx + 1, totalChunks);
     $('#chunkProgress').textContent = currentProviderId() === 'openai'
       ? I18N.t('progress.section', { n, m: totalChunks })
       : `${n} / ${totalChunks}`;
+    if (elapsedSec != null || remainingSec != null) {
+      updateTransportClock(elapsedSec, remainingSec, ratio);
+    } else if (typeof TextNav !== 'undefined') {
+      const t = TextNav.estimateTiming(charIndex, totalChars, parseFloat($('#rateSlider').value) || 1);
+      updateTransportClock(t.elapsedSec, t.remainingSec, ratio);
+    }
     if ($('#hlToggle').checked) updateHighlight(charIndex);
-    if ($('#saveProgress').checked) BridgeAPI.setPref('saved_position', charIndex);
+    // Progress now fires at frame rate; persist at most ~once/sec to avoid
+    // hammering QSettings (each set() calls sync()).
+    if ($('#saveProgress').checked) {
+      const now = Date.now();
+      if (now - _lastSavedPosAt > 1000) { _lastSavedPosAt = now; BridgeAPI.setPref('saved_position', charIndex); }
+    }
   });
   reader.on('error', ({ message }) => toast(message, 'error', 4000));
 

@@ -101,6 +101,22 @@ def cache_dir() -> Path:
     return p
 
 
+def default_export_dir() -> Path:
+    """Default folder for user-facing "Generate Audio File" exports.
+
+    Installed: ``<Music>/TextSpeak Pro/`` (``XDG_MUSIC_DIR`` when set).
+    Portable: ``<exe_dir>/audio/`` so everything stays self-contained.
+    """
+    if is_portable():
+        p = _exe_dir() / "audio"
+    else:
+        xdg = (os.environ.get("XDG_MUSIC_DIR") or "").strip()
+        music = Path(xdg) if xdg else (Path.home() / "Music")
+        p = music / "TextSpeak Pro"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def web_storage_dir() -> Path:
     """Persistent Chromium storage (IndexedDB/localStorage) for the webview.
 

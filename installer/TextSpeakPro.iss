@@ -6,7 +6,7 @@
 ; optional desktop icon, and a proper uninstaller.
 
 #define MyAppName        "TextSpeak Pro"
-#define MyAppVersion     "1.0.0"
+#define MyAppVersion     "1.1.0"
 #define MyAppPublisher   "JojoLapin Inc."
 #define MyAppURL         "https://github.com/"
 #define MyAppExeName     "TextSpeakPro.exe"

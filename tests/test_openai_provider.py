@@ -236,3 +236,148 @@ def test_synthesize_empty_text_rejected(monkeypatch):
     p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=FakeSession())
     with pytest.raises(OpenAIError):
         p.synthesize("   ")
+
+
+# ---- synthesis: disk cache ------------------------------------------------
+
+def test_synthesize_serves_identical_request_from_cache(monkeypatch, tmp_path):
+    from app.audio_cache import AudioCache
+
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(FakeResp(200, b"FROM_NET"))
+    cache = AudioCache(root=tmp_path / "audio")
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=sess)
+
+    a1, _ = p.synthesize(
+        "Hello cache", voice="alloy", model="gpt-4o-mini-tts",
+        instructions="calm", response_format="mp3",
+        cache=cache, tab_id="tab-1",
+    )
+    assert a1 == b"FROM_NET"
+    assert sess.last is not None
+    sess.last = None  # reset so a second call must not hit the network
+
+    a2, _ = p.synthesize(
+        "Hello cache", voice="alloy", model="gpt-4o-mini-tts",
+        instructions="calm", response_format="mp3",
+        cache=cache, tab_id="tab-1",
+    )
+    assert a2 == b"FROM_NET"
+    assert sess.last is None  # cache hit — no network call
+
+
+def test_synthesize_cache_miss_when_voice_or_style_changes(monkeypatch, tmp_path):
+    from app.audio_cache import AudioCache
+
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(FakeResp(200, b"A"))
+    cache = AudioCache(root=tmp_path / "audio")
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=sess)
+
+    p.synthesize("Hello", voice="alloy", instructions="calm", response_format="mp3",
+                 cache=cache, tab_id="t")
+    sess._resp = FakeResp(200, b"B")
+    sess.last = None
+    audio, _ = p.synthesize("Hello", voice="nova", instructions="calm", response_format="mp3",
+                            cache=cache, tab_id="t")
+    assert audio == b"B"
+    assert sess.last is not None  # network called again
+
+    sess._resp = FakeResp(200, b"C")
+    sess.last = None
+    audio2, _ = p.synthesize("Hello", voice="alloy", instructions="excited", response_format="mp3",
+                             cache=cache, tab_id="t")
+    assert audio2 == b"C"
+    assert sess.last is not None
+
+
+# ---- smart tools (text -> text) -------------------------------------------
+
+def _chat_resp(text):
+    return FakeResp(200, b"", {"choices": [{"message": {"content": text}}]})
+
+
+def test_transform_clean_posts_to_chat_and_returns_text(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(_chat_resp("  Cleaned text.  "))
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "sk-x"}), session=sess)
+    out = p.transform_text("clean me", "clean")
+    assert out == "Cleaned text."  # trimmed
+    assert sess.last["url"].endswith("/chat/completions")
+    body = sess.last["json"]
+    assert body["model"] == oap.DEFAULT_TEXT_MODEL
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][1]["content"] == "clean me"
+    assert sess.last["headers"]["Authorization"] == "Bearer sk-x"
+
+
+def test_transform_translate_injects_target_language(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(_chat_resp("Bonjour"))
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=sess)
+    out = p.transform_text("Hello", "translate", target_lang="French")
+    assert out == "Bonjour"
+    system = sess.last["json"]["messages"][0]["content"]
+    assert "French" in system
+
+
+def test_transform_uses_custom_text_model_from_settings(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(_chat_resp("x"))
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k", "openai_text_model": "gpt-4o"}), session=sess)
+    p.transform_text("hi", "summarize")
+    assert sess.last["json"]["model"] == "gpt-4o"
+
+
+def test_transform_unknown_task_rejected(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=FakeSession(_chat_resp("x")))
+    with pytest.raises(OpenAIError):
+        p.transform_text("hi", "nonsense")
+
+
+def test_transform_empty_text_rejected(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=FakeSession(_chat_resp("x")))
+    with pytest.raises(OpenAIError):
+        p.transform_text("   ", "clean")
+
+
+def test_transform_requires_key(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    p = OpenAIProvider(FakeSettings({}), session=FakeSession(_chat_resp("x")))
+    with pytest.raises(OpenAIError):
+        p.transform_text("hi", "clean")
+
+
+def test_transform_cancelled_before_request(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+
+    class Tok:
+        cancelled = True
+
+    sess = FakeSession(_chat_resp("x"))
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=sess)
+    with pytest.raises(OpenAIError) as ei:
+        p.transform_text("hi", "clean", cancel=Tok())
+    assert str(ei.value) == "cancelled"
+    assert sess.last is None
+
+
+def test_transform_401_is_sanitized(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(FakeResp(401, b"", {"error": {"message": "Bad key sk-secret"}}))
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "sk-secret"}), session=sess)
+    with pytest.raises(OpenAIError) as ei:
+        p.transform_text("hi", "clean")
+    assert "sk-secret" not in str(ei.value)
+
+
+def test_transform_malformed_response_is_sanitized(monkeypatch):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    sess = FakeSession(FakeResp(200, b"", {"unexpected": True}))
+    p = OpenAIProvider(FakeSettings({"openai_api_key": "k"}), session=sess)
+    with pytest.raises(OpenAIError) as ei:
+        p.transform_text("hi", "clean")
+    assert "unexpected" in str(ei.value).lower()

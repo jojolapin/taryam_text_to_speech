@@ -49,7 +49,14 @@ _DEFAULTS: dict[str, Any] = {
     "openai_voice": "alloy",
     "openai_format": "mp3",          # mp3 | wav | opus | aac | flac
     "openai_base_url": "",           # optional override; empty => official API
+    "openai_text_model": "gpt-4o-mini",  # chat model for smart tools
     "ai_disclosure_ack": False,      # user acknowledged AI-voice disclosure
+    # Non-destructive pronunciation: JSON list of global rules
+    # [{from,to,whole_word,match_case,is_regex,enabled}]. Per-document rules live
+    # in the workspace snapshot (IndexedDB), merged with these at play time.
+    "pronunciation_rules": "[]",
+    # Speaking style preset id (OpenAI delivery); "" => neutral/default.
+    "speaking_style": "neutral",
 }
 
 

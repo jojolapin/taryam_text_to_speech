@@ -23,6 +23,35 @@ log = logging.getLogger("textspeak.openai")
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini-tts"
+# Chat model used by the "smart tools" (clean / translate / summarize / explain).
+DEFAULT_TEXT_MODEL = "gpt-4o-mini"
+
+# Smart-tool tasks -> system prompt. Prompts insist on returning ONLY the
+# transformed text (no preamble) and preserving the source language unless the
+# task is an explicit translation. Kept in English; the models follow reliably.
+SMART_TASKS = {
+    "clean": (
+        "You are a meticulous copy editor. Fix spelling, punctuation, spacing "
+        "and obvious grammar mistakes in the user's text WITHOUT changing its "
+        "meaning, tone, language or structure. Do not add or remove content. "
+        "Return ONLY the corrected text, with no comments or preamble."
+    ),
+    "summarize": (
+        "You are a concise summarizer. Produce a clear, faithful summary of the "
+        "user's text in the SAME language as the text. Keep the key points. "
+        "Return ONLY the summary, with no preamble."
+    ),
+    "explain": (
+        "You explain things simply. Rewrite the user's text so a general "
+        "audience can understand it, in the SAME language as the text, keeping "
+        "it accurate. Return ONLY the explanation, with no preamble."
+    ),
+    "translate": (
+        "You are a professional translator. Translate the user's text into "
+        "{target}. Preserve meaning, tone and formatting. Return ONLY the "
+        "translation, with no preamble."
+    ),
+}
 
 # Voices supported by the speech endpoint (gpt-4o-mini-tts superset).
 OPENAI_VOICES = [
@@ -183,8 +212,16 @@ class OpenAIProvider(VoiceProvider):
         response_format: Optional[str] = None,
         cancel=None,
         timeout: float = 60.0,
+        cache=None,
+        tab_id: str = "",
+        use_cache: bool = True,
     ) -> Tuple[bytes, str]:
-        """Return ``(audio_bytes, mime)``. Raises :class:`OpenAIError`."""
+        """Return ``(audio_bytes, mime)``. Raises :class:`OpenAIError`.
+
+        When ``cache`` is provided, identical
+        (text+model+voice+style+format) requests are served from disk without
+        a network call.
+        """
         cfg = self.config()
         if not cfg.configured:
             raise OpenAIError("OpenAI API key is not configured.")
@@ -198,12 +235,25 @@ class OpenAIProvider(VoiceProvider):
         fmt = response_format or cfg.response_format
         if fmt not in OPENAI_FORMATS:
             fmt = "mp3"
+        style = instructions or ""
+
+        cache_key = None
+        if cache is not None and use_cache:
+            from .audio_cache import make_key
+            cache_key = make_key(
+                provider="openai", model=model, voice=voice,
+                style=style, fmt=fmt, text=text,
+            )
+            hit = cache.get(cache_key)
+            if hit is not None:
+                cache.touch_tab(cache_key, tab_id)
+                return hit, mime_for(fmt)
 
         body = {"model": model, "input": text, "voice": voice, "response_format": fmt}
         if model in _SPEED_MODELS:
             body["speed"] = max(0.25, min(4.0, float(speed) or 1.0))
-        elif instructions:
-            body["instructions"] = instructions
+        elif style:
+            body["instructions"] = style
 
         url = f"{cfg.base_url}/audio/speech"
         headers = {"Authorization": f"Bearer {cfg.api_key}", "Content-Type": "application/json"}
@@ -228,7 +278,91 @@ class OpenAIProvider(VoiceProvider):
         content = resp.content
         if not content:
             raise OpenAIError("OpenAI returned an empty audio response.")
+
+        if cache is not None and cache_key:
+            try:
+                cache.put(cache_key, content, provider="openai", fmt=fmt, tab_id=tab_id or "")
+            except OSError:
+                log.warning("Failed to write OpenAI audio to cache", exc_info=True)
+
         return content, mime_for(fmt)
+
+    # ---- smart tools (text -> text) ----
+    def transform_text(
+        self,
+        text: str,
+        task: str,
+        *,
+        target_lang: str = "",
+        model: Optional[str] = None,
+        cancel=None,
+        timeout: float = 90.0,
+    ) -> str:
+        """Run a smart-tool text transformation and return the new text.
+
+        ``task`` is one of :data:`SMART_TASKS`. Uses the chat-completions
+        endpoint with a text model (never a TTS model). Raises
+        :class:`OpenAIError` on any failure (message is always sanitized).
+        """
+        cfg = self.config()
+        if not cfg.configured:
+            raise OpenAIError("OpenAI API key is not configured.")
+        if not (text and text.strip()):
+            raise OpenAIError("Nothing to transform.")
+        if task not in SMART_TASKS:
+            raise OpenAIError(f"Unknown smart tool: {task}")
+        if cancel is not None and getattr(cancel, "cancelled", False):
+            raise OpenAIError("cancelled")
+
+        system = SMART_TASKS[task]
+        if task == "translate":
+            target = (target_lang or "English").strip() or "English"
+            system = system.format(target=target)
+
+        text_model = (model or self._text_model()).strip() or DEFAULT_TEXT_MODEL
+        body = {
+            "model": text_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.3,
+        }
+        url = f"{cfg.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {cfg.api_key}", "Content-Type": "application/json"}
+
+        session = self._session
+        if session is None:
+            import requests  # lazy; bundled
+            session = requests
+
+        try:
+            resp = session.post(url, headers=headers, json=body, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            raise OpenAIError(self._transport_error(exc)) from None
+
+        if cancel is not None and getattr(cancel, "cancelled", False):
+            raise OpenAIError("cancelled")
+
+        status = getattr(resp, "status_code", 0)
+        if status != 200:
+            raise OpenAIError(self._http_error(status, resp))
+
+        try:
+            data = resp.json()
+            out = data["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise OpenAIError("OpenAI returned an unexpected response.") from None
+        if not (out and out.strip()):
+            raise OpenAIError("OpenAI returned an empty result.")
+        return out.strip()
+
+    def _text_model(self) -> str:
+        try:
+            return (self._settings.get("openai_text_model", DEFAULT_TEXT_MODEL)
+                    or DEFAULT_TEXT_MODEL)
+        except Exception:  # noqa: BLE001
+            return DEFAULT_TEXT_MODEL
 
     # ---- error sanitization (never leak the key or raw payloads) ----
     @staticmethod

@@ -24,8 +24,12 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
 
 from . import APP_AUTHOR, APP_COPYRIGHT, APP_NAME, APP_VERSION
 from . import paths as app_paths
+from . import pronunciation
+from . import speaking_styles
 from . import text_normalize
 from . import voice_catalog
+from .audio_cache import AudioCache, join_audio_parts
+from .chunking import chunk as semantic_chunk
 from .openai_provider import (
     OPENAI_FORMATS,
     OPENAI_MODELS,
@@ -90,6 +94,8 @@ class Bridge(QObject):
     synthesizeError = Signal(str, str)       # (request_id, message)
     openaiAudioReady = Signal(str, str, str) # (request_id, audio_base64, mime)
     openaiAudioError = Signal(str, str)      # (request_id, message)
+    smartToolReady = Signal(str, str)        # (request_id, transformed_text)
+    smartToolError = Signal(str, str)        # (request_id, message)
     exportProgress = Signal(str, str, float) # (request_id, stage, ratio)
     exportDone = Signal(str, str, float, float)  # (request_id, path, audio_seconds, synth_seconds)
     exportError = Signal(str, str)           # (request_id, message)
@@ -120,6 +126,24 @@ class Bridge(QObject):
         self.providers = ProviderRegistry("piper")
         self.providers.register(PiperProvider(self.engine))
         self.providers.register(OpenAIProvider(self.settings))
+        self.audio_cache = AudioCache()
+
+        # Active pronunciation rules (merged global + per-document) pushed from
+        # the UI. Seeded from the saved global rules so the very first synthesis
+        # already honours them even before the webview reports its active tab.
+        self._pron_rules: list = []
+        try:
+            seeded = self.settings.get_json("pronunciation_rules", [])
+            if isinstance(seeded, list):
+                self._pron_rules = seeded
+        except (AttributeError, TypeError, ValueError):
+            self._pron_rules = []
+
+    def _export_start_dir(self) -> str:
+        last = (self.settings.get("last_export_dir", "") or "").strip()
+        if last and Path(last).is_dir():
+            return last
+        return str(app_paths.default_export_dir())
 
     # ---- text normalization (markdown / html -> TTS plain) ----
 
@@ -147,14 +171,17 @@ class Bridge(QObject):
     def _normalize_for_tts(self, text: str, fmt: str) -> str:
         effective = self._effective_format(fmt, text)
         if effective == "plain":
-            return text
-        return text_normalize.normalize(
-            text, effective,
-            lang=self._resolve_md_lang(),
-            read_code=bool(self.settings.get("md_read_code", False)),
-            read_urls=bool(self.settings.get("md_read_urls", False)),
-            read_tables=bool(self.settings.get("md_read_tables", True)),
-        )
+            plain = text
+        else:
+            plain = text_normalize.normalize(
+                text, effective,
+                lang=self._resolve_md_lang(),
+                read_code=bool(self.settings.get("md_read_code", False)),
+                read_urls=bool(self.settings.get("md_read_urls", False)),
+                read_tables=bool(self.settings.get("md_read_tables", True)),
+            )
+        # Non-destructive pronunciation: only the spoken string is rewritten.
+        return pronunciation.apply(plain, self._pron_rules)
 
     # --- PySide6 @Slot type hints must use the exact Python types it maps ---
 
@@ -292,6 +319,101 @@ class Bridge(QObject):
         return json.dumps({"plain": plain, "format": effective})
 
     # ============================================================
+    # Pronunciation (non-destructive spoken-text substitutions)
+    # ============================================================
+    @Slot(str)
+    def set_pronunciation_rules(self, rules_json: str) -> None:
+        """Set the active (merged global + per-document) pronunciation rules.
+
+        The UI calls this whenever rules are edited or the active tab changes.
+        Rules only affect the spoken string, never the editor text.
+        """
+        try:
+            rules = json.loads(rules_json) if rules_json else []
+            if not isinstance(rules, list):
+                rules = []
+        except (TypeError, ValueError):
+            rules = []
+        self._pron_rules = rules
+
+    @Slot(str, str, str, result=str)
+    def preview_pronunciation(self, text: str, rules_json: str, fmt: str) -> str:
+        """Return JSON ``{original, spoken}`` previewing how ``text`` is read.
+
+        Applies markdown normalization plus the provided (not the stored) rules
+        so the UI can preview edits before saving them.
+        """
+        try:
+            rules = json.loads(rules_json) if rules_json else []
+            if not isinstance(rules, list):
+                rules = []
+        except (TypeError, ValueError):
+            rules = []
+        base = text or ""
+        effective = self._effective_format(fmt or "auto", base)
+        if effective == "plain":
+            plain = base
+        else:
+            plain = text_normalize.normalize(
+                base, effective,
+                lang=self._resolve_md_lang(),
+                read_code=bool(self.settings.get("md_read_code", False)),
+                read_urls=bool(self.settings.get("md_read_urls", False)),
+                read_tables=bool(self.settings.get("md_read_tables", True)),
+            )
+        spoken = pronunciation.apply(plain, rules)
+        return json.dumps({"original": plain, "spoken": spoken})
+
+    # ============================================================
+    # Speaking styles (OpenAI delivery presets)
+    # ============================================================
+    @Slot(result=str)
+    def speaking_styles(self) -> str:
+        """JSON list of speaking-style presets (id, localized labels, instructions)."""
+        return json.dumps({
+            "default": speaking_styles.DEFAULT_STYLE,
+            "presets": speaking_styles.all_presets(),
+        })
+
+    # ============================================================
+    # Smart tools (OpenAI text -> text; result goes to a new tab)
+    # ============================================================
+    @Slot(str, str, str, str)
+    def smart_tool(self, text: str, task: str, target_lang: str, request_id: str) -> None:
+        """Run a smart-tool transformation off the UI thread.
+
+        Emits ``smartToolReady(request_id, text)`` or
+        ``smartToolError(request_id, message)``. Never mutates the source; the
+        UI decides what to do with the result (open in a new tab).
+        """
+        token = CancelToken()
+        self._cancels[request_id] = token
+        provider = self.providers.get("openai")
+
+        def _worker():
+            try:
+                if not isinstance(provider, OpenAIProvider):
+                    self.smartToolError.emit(request_id, "OpenAI provider unavailable.")
+                    return
+                out = provider.transform_text(
+                    text or "", task or "", target_lang=target_lang or "", cancel=token,
+                )
+                if token.cancelled:
+                    return
+                self.smartToolReady.emit(request_id, out)
+            except OpenAIError as e:
+                if str(e) == "cancelled":
+                    return
+                self.smartToolError.emit(request_id, str(e))
+            except Exception as e:  # noqa: BLE001
+                log.exception("Smart tool failed")
+                self.smartToolError.emit(request_id, str(e))
+            finally:
+                self._cancels.pop(request_id, None)
+
+        self.pool.start(_Runnable(_worker))
+
+    # ============================================================
     # Synthesis (single chunk for playback)
     # ============================================================
     @Slot(str, str, float, float, str, str)
@@ -319,19 +441,21 @@ class Bridge(QObject):
 
         self.pool.start(_Runnable(_worker))
 
-    @Slot(str, str, str, float, str, str, str, str)
+    @Slot(str, str, str, float, str, str, str, str, str)
     def synthesize_openai(self, text: str, voice: str, model: str, speed: float,
                           instructions: str, response_format: str,
-                          text_format: str, request_id: str) -> None:
+                          text_format: str, tab_id: str, request_id: str) -> None:
         """Synthesize one chunk via OpenAI. Emits openaiAudioReady/Error.
 
         The API key is resolved and used entirely inside the provider; it is
-        never part of this call's arguments or the emitted signals.
+        never part of this call's arguments or the emitted signals. Identical
+        requests are served from the on-disk audio cache when available.
         """
         token = CancelToken()
         self._cancels[request_id] = token
         speech_text = self._normalize_for_tts(text, text_format or "plain")
         provider = self.providers.get("openai")
+        cache = self.audio_cache
 
         def _worker():
             try:
@@ -346,6 +470,8 @@ class Bridge(QObject):
                     instructions=instructions or "",
                     response_format=response_format or None,
                     cancel=token,
+                    cache=cache,
+                    tab_id=tab_id or "",
                 )
                 if token.cancelled:
                     return
@@ -395,7 +521,7 @@ class Bridge(QObject):
             "wav": "WAV Audio (*.wav)",
             "ogg": "OGG Vorbis (*.ogg)",
         }
-        save_dir = self.settings.get("last_export_dir", str(Path.home())) or str(Path.home())
+        save_dir = self._export_start_dir()
         start_path = str(Path(save_dir) / suggested)
         out_path, _ = QFileDialog.getSaveFileName(None, "Save audio", start_path, filters[fmt])
         if not out_path:
@@ -443,6 +569,144 @@ class Bridge(QObject):
 
         self.pool.start(_Runnable(_worker))
 
+    @Slot(str, str, str, float, str, str, str, str, str, str, str)
+    def export_openai(self, text: str, voice: str, model: str, speed: float,
+                      instructions: str, response_format: str, id3_author: str,
+                      suggested_name: str, text_format: str, tab_id: str,
+                      request_id: str) -> None:
+        """Export full (or pre-selected) text via OpenAI, chunking + joining.
+
+        Uses the same semantic chunker as playback, serves chunks from the
+        content-hash cache when possible, then joins MP3/WAV parts into one file.
+        """
+        from PySide6.QtWidgets import QFileDialog
+
+        text = self._normalize_for_tts(text, text_format or "plain")
+        if not (text and text.strip()):
+            self.exportError.emit(request_id, "Nothing to synthesize.")
+            return
+
+        fmt = (response_format or "mp3").lower()
+        if fmt not in {"mp3", "wav", "opus", "aac", "flac"}:
+            fmt = "mp3"
+        # Multi-chunk join is reliable for mp3/wav only; coerce otherwise.
+        join_fmt = fmt if fmt in {"mp3", "wav"} else "mp3"
+        suggested = _safe_filename(suggested_name, join_fmt, fallback="textspeak-openai")
+
+        filters = {
+            "mp3": "MP3 Audio (*.mp3)",
+            "wav": "WAV Audio (*.wav)",
+            "opus": "Opus Audio (*.opus)",
+            "aac": "AAC Audio (*.aac)",
+            "flac": "FLAC Audio (*.flac)",
+        }
+        save_dir = self._export_start_dir()
+        start_path = str(Path(save_dir) / suggested)
+        out_path, _ = QFileDialog.getSaveFileName(
+            None, "Save audio", start_path, filters.get(join_fmt, filters["mp3"])
+        )
+        if not out_path:
+            self.exportError.emit(request_id, "cancelled")
+            return
+        self.settings.set("last_export_dir", str(Path(out_path).parent))
+
+        token = CancelToken()
+        self._cancels[request_id] = token
+        provider = self.providers.get("openai")
+        cache = self.audio_cache
+        chunks = semantic_chunk(text, max_chars=1600) or [
+            {"text": text, "start": 0, "end": len(text)}
+        ]
+
+        def _worker():
+            t0 = time.time()
+            try:
+                if not isinstance(provider, OpenAIProvider):
+                    self.exportError.emit(request_id, "OpenAI provider unavailable.")
+                    return
+                parts: list[bytes] = []
+                total = len(chunks)
+                for i, ch in enumerate(chunks):
+                    if token.cancelled:
+                        self.exportError.emit(request_id, "cancelled")
+                        return
+                    self.exportProgress.emit(request_id, "synth", i / max(1, total))
+                    audio, _mime = provider.synthesize(
+                        ch["text"],
+                        voice=voice or None,
+                        model=model or None,
+                        speed=speed or 1.0,
+                        instructions=instructions or "",
+                        response_format=join_fmt,
+                        cancel=token,
+                        cache=cache,
+                        tab_id=tab_id or "",
+                        timeout=120.0,
+                    )
+                    parts.append(audio)
+                if token.cancelled:
+                    self.exportError.emit(request_id, "cancelled")
+                    return
+                self.exportProgress.emit(request_id, "encode", 0.95)
+                data = join_audio_parts(parts, join_fmt)
+                out = Path(out_path)
+                if join_fmt == "mp3":
+                    write_mp3_with_tags(
+                        out, data,
+                        title=_first_line_snippet(text) or out.stem,
+                        artist=id3_author or APP_AUTHOR,
+                        album=APP_NAME,
+                        comment=f"Generated by {APP_NAME} via OpenAI - {APP_COPYRIGHT}",
+                    )
+                else:
+                    out.write_bytes(data)
+                self.exportDone.emit(request_id, str(out), 0.0, time.time() - t0)
+            except OpenAIError as e:
+                if str(e) == "cancelled":
+                    self.exportError.emit(request_id, "cancelled")
+                else:
+                    self.exportError.emit(request_id, str(e))
+            except Exception as e:  # noqa: BLE001
+                log.exception("OpenAI export failed")
+                self.exportError.emit(request_id, str(e))
+            finally:
+                self._cancels.pop(request_id, None)
+
+        self.pool.start(_Runnable(_worker))
+
+    # ============================================================
+    # Audio cache management
+    # ============================================================
+    @Slot(result=str)
+    def cache_stats(self) -> str:
+        """JSON sizes for OpenAI audio cache + Piper samples. Never includes secrets."""
+        try:
+            return json.dumps(self.audio_cache.stats())
+        except Exception:  # noqa: BLE001
+            log.exception("cache_stats failed")
+            return json.dumps({"totalBytes": 0, "audioBytes": 0, "sampleBytes": 0})
+
+    @Slot(str, str, result=str)
+    def clear_audio_cache(self, provider: str, tab_id: str) -> str:
+        """Clear cached audio. ``provider`` may be openai|piper|all|'' ;
+        ``tab_id`` clears only that tab's OpenAI associations. Never deletes tab text."""
+        try:
+            prov = (provider or "").strip().lower()
+            tid = (tab_id or "").strip()
+            if tid:
+                result = self.audio_cache.clear(tab_id=tid)
+            elif prov in {"", "all"}:
+                result = self.audio_cache.clear(include_samples=True)
+            elif prov == "piper":
+                result = self.audio_cache.clear(provider="piper")
+            else:
+                result = self.audio_cache.clear(provider=prov)
+            stats = self.audio_cache.stats()
+            return json.dumps({**result, "stats": stats})
+        except Exception:  # noqa: BLE001
+            log.exception("clear_audio_cache failed")
+            return json.dumps({"removedBytes": 0, "removedCount": 0, "error": "clear failed"})
+
     @Slot(str, str, str, float, float, int, str, str, str, str)
     def batch_export(self, paragraphs_json: str, voice_id: str, fmt: str,
                      length_scale: float, volume: float, bitrate: int,
@@ -461,7 +725,7 @@ class Bridge(QObject):
             self.exportError.emit(request_id, "no paragraphs")
             return
 
-        save_dir = self.settings.get("last_export_dir", str(Path.home())) or str(Path.home())
+        save_dir = self._export_start_dir()
         folder = QFileDialog.getExistingDirectory(None, "Choose output folder", save_dir)
         if not folder:
             self.exportError.emit(request_id, "cancelled")

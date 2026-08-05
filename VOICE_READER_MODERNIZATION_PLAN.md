@@ -6,6 +6,25 @@
 
 ---
 
+## Implementation status (v1.1.0)
+
+All phases complete. Full suite green: **147 pytest + 83 node:test** passing.
+
+| Phase | Status | Key deliverables |
+| --- | --- | --- |
+| 0 — Baseline & regression | ✅ Done | Green tests, `.env` ignored, JS + bridge smoke tests |
+| 1 — Tabs + document state | ✅ Done | Multi-tab workspace, IndexedDB persistence |
+| 2 — Provider abstraction | ✅ Done | `providers.js` / `providers.py`, Piper via interface |
+| 3 — OpenAI backend | ✅ Done | Config/.env loader, `openai_provider.py`, bridge slots, status UI |
+| 4 — Long-text generation | ✅ Done | Semantic chunking, progress/cancel/retry/cache |
+| 5 — Audio export + cache | ✅ Done | OpenAI export, `audio_cache.py`, cache management UI |
+| 6 — Playback & highlighting | ✅ Done | Sentence/paragraph nav, weighted highlight sync, rAF ticker |
+| 7 — Smart reading & pronunciation | ✅ Done | `pronunciation.py` (global+per-doc, non-destructive, preview), `speaking_styles.py` presets, AI smart tools → new tab |
+| 8 — UI polish / a11y / shortcuts | ✅ Done | `:focus-visible`, ARIA labels, reduced-motion, keyboard-shortcuts help dialog (`F1`/`?`), multi-attr i18n |
+| 9 — Regression & release | ✅ Done | Full suite green, README refresh, version bump to 1.1.0, security self-review |
+
+---
+
 ## 0. Important reality check (read this first)
 
 The modernization brief describes the target as a **Flask + Piper browser web app**

@@ -51,6 +51,13 @@
       this._retryBaseMs = deps.retryBaseMs != null ? deps.retryBaseMs : 400;
       this._retries = new Map();       // idx -> attempts
       this._schedule = deps.schedule || ((fn, ms) => setTimeout(fn, ms));
+      this._nav = deps.nav || (typeof TextNav !== 'undefined' ? TextNav : null);
+      // Smooth highlight: drive progress at frame rate while playing (browser
+      // `timeupdate` only fires ~4x/sec). Left null under Node so tests are
+      // unaffected and rely on explicit _emitProgress().
+      this._raf = deps.raf || (typeof requestAnimationFrame !== 'undefined' ? requestAnimationFrame.bind(null) : null);
+      this._cancelRaf = deps.cancelRaf || (typeof cancelAnimationFrame !== 'undefined' ? cancelAnimationFrame.bind(null) : null);
+      this._rafId = null;
 
       this.audio = new this._AudioCtor();
       this.audio.preload = 'auto';
@@ -72,7 +79,22 @@
       const prev = this.state;
       this.state = newState;
       if (prev !== newState) this._logger.info(`state: ${prev} -> ${newState}${details.reason ? ' (' + details.reason + ')' : ''}`);
+      if (newState === 'playing') this._startTicker(); else this._stopTicker();
       this._emit('state', { state: newState, prev, ...details });
+    }
+    _startTicker() {
+      if (!this._raf || this._rafId != null) return;
+      const tick = () => {
+        this._rafId = null;
+        if (this.state !== 'playing') return;
+        this._emitProgress();
+        this._rafId = this._raf(tick);
+      };
+      this._rafId = this._raf(tick);
+    }
+    _stopTicker() {
+      if (this._rafId != null && this._cancelRaf) { try { this._cancelRaf(this._rafId); } catch {} }
+      this._rafId = null;
     }
     _attachAudio() {
       this.audio.addEventListener('timeupdate', () => this._onTimeUpdate());
@@ -143,7 +165,51 @@
       const cps = 12 * this.opts.rate;
       const delta = Math.round(seconds * cps);
       const newPos = Math.max(0, Math.min(this.text.length - 1, this._currentCharIndex() + delta));
-      return this.start(this.text, this.opts, newPos);
+      return this.seekToChar(newPos);
+    }
+    /** Jump to a character offset. Seeks inside the current chunk when possible
+     * (keeps the session + cache); otherwise starts a fresh session at that pos. */
+    seekToChar(pos) {
+      if (this.state !== 'playing' && this.state !== 'paused' && this.state !== 'loading') return false;
+      if (!this.text) return false;
+      pos = Math.max(0, Math.min(this.text.length - 1, pos | 0));
+      const chunk = this.chunks[this.chunkIdx];
+      const dur = this.audio.duration;
+      if (
+        chunk &&
+        pos >= chunk.start && pos < chunk.end &&
+        Number.isFinite(dur) && dur > 0 &&
+        this.audioCache.has(this.chunkIdx)
+      ) {
+        // Invert the same weighted mapping so a click/seek lands where the
+        // highlight will be, not at a naive proportional offset.
+        const weights = this._chunkWeights(chunk);
+        const frac = weights
+          ? this._nav.fractionForOffset(weights, pos)
+          : (pos - chunk.start) / Math.max(1, chunk.end - chunk.start);
+        this.audio.currentTime = Math.max(0, Math.min(dur, frac * dur));
+        this._emitProgress();
+        return true;
+      }
+      return this.start(this.text, this.opts, pos);
+    }
+    skipSentence(dir) {
+      if (!this._nav || (this.state !== 'playing' && this.state !== 'paused')) return false;
+      const pos = this._currentCharIndex();
+      const target = dir > 0
+        ? this._nav.nextSentenceStart(this.text, pos)
+        : this._nav.prevSentenceStart(this.text, pos);
+      if (target == null || target === pos) return false;
+      return this.seekToChar(target);
+    }
+    skipParagraph(dir) {
+      if (!this._nav || (this.state !== 'playing' && this.state !== 'paused')) return false;
+      const pos = this._currentCharIndex();
+      const target = dir > 0
+        ? this._nav.nextParagraphStart(this.text, pos)
+        : this._nav.prevParagraphStart(this.text, pos);
+      if (target == null || target === pos) return false;
+      return this.seekToChar(target);
     }
     setVolume(v) { this.opts.volume = Math.max(0, Math.min(1, Number(v) || 0)); this.audio.volume = this.opts.volume; }
 
@@ -258,21 +324,45 @@
       if (this.state === 'idle') return;
       this._emit('error', { message: 'Audio element error' });
     }
+    _chunkWeights(chunk) {
+      if (!this._nav || typeof this._nav.buildWeights !== 'function') return null;
+      if (!chunk._weights) chunk._weights = this._nav.buildWeights(this.text, chunk.start, chunk.end);
+      return chunk._weights;
+    }
     _currentCharIndex() {
       if (this.chunkIdx >= this.chunks.length) return this.text.length;
       const chunk = this.chunks[this.chunkIdx]; if (!chunk) return 0;
       const dur = this.audio.duration;
       if (!Number.isFinite(dur) || dur <= 0) return chunk.start;
       const progress = Math.max(0, Math.min(1, this.audio.currentTime / dur));
+      // Weighted mapping (audio time -> spoken-cost) keeps the marker synced with
+      // the voice; falls back to a flat per-character estimate if nav is absent.
+      const weights = this._chunkWeights(chunk);
+      if (weights) return this._nav.offsetForFraction(weights, progress);
       return chunk.start + Math.floor(progress * (chunk.end - chunk.start));
     }
     _emitProgress() {
-      this._emit('progress', {
-        charIndex: this._currentCharIndex(),
-        totalChars: this.text.length,
+      const charIndex = this._currentCharIndex();
+      const totalChars = this.text.length;
+      const payload = {
+        charIndex,
+        totalChars,
         chunkIdx: this.chunkIdx,
         totalChunks: this.chunks.length,
-      });
+      };
+      if (this._nav && this._nav.estimateTiming) {
+        const t = this._nav.estimateTiming(charIndex, totalChars, this.opts.rate);
+        payload.elapsedSec = t.elapsedSec;
+        payload.remainingSec = t.remainingSec;
+        payload.totalSec = t.totalSec;
+      }
+      if (this._nav && this._nav.sentenceAt) {
+        const s = this._nav.sentenceAt(this.text, charIndex);
+        payload.sentenceStart = s.start;
+        payload.sentenceEnd = s.end;
+        payload.sentenceIndex = s.index;
+      }
+      this._emit('progress', payload);
     }
     _finish() {
       this._hardStop('finished', true);
@@ -281,6 +371,7 @@
     }
     _hardStop(reason, silent = false) {
       if (!silent) this._logger.debug('hard stop: ' + reason);
+      this._stopTicker();
       this.sessionId += 1;
       if (this._retries) this._retries.clear();
       // Best-effort: ask the provider to cancel any in-flight network requests

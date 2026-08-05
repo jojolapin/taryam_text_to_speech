@@ -15,6 +15,7 @@ const { test, mock } = require('node:test');
 const assert = require('node:assert');
 
 const { TextChunker } = require('../../ui/lib/text-chunker.js');
+const { TextNav } = require('../../ui/lib/text-nav.js');
 const { PiperReader } = require('../../ui/lib/piper-reader.js');
 
 // ---- test doubles ---------------------------------------------------------
@@ -82,6 +83,7 @@ function makeReader() {
     URL: url,
     provider,
     chunker: TextChunker,
+    nav: TextNav,
     i18n: { t: (k) => k },
     logger: { info() {}, debug() {}, warn() {}, error() {} },
     b64ToBlob: () => ({ size: 1024 }),
@@ -307,4 +309,64 @@ test('provider-supplied mime is used to build the blob', async (t) => {
   provider.resolveAll('AAAA', 'audio/mpeg');
   await startP;
   assert.ok(seen.includes('audio/mpeg'), 'blob should be built with the provider mime');
+});
+
+test('seekToChar within the current chunk updates currentTime (no new session)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { reader, provider, audio } = makeReader();
+  const text = 'AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC'; // one chunk typically
+  const startP = reader.start(text, { voice: 'v', maxChars: 500 });
+  provider.resolveAll();
+  await startP;
+  const sid = reader.sessionId;
+  const a = audio();
+  a.duration = 10;
+  a.currentTime = 0;
+  const mid = Math.floor(text.length / 2);
+  const ok = reader.seekToChar(mid);
+  assert.strictEqual(ok, true);
+  assert.strictEqual(reader.sessionId, sid, 'intra-chunk seek must keep the session');
+  assert.ok(a.currentTime > 0, 'audio.currentTime should advance');
+});
+
+test('skipSentence jumps forward and emits progress with timing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { reader, provider } = makeReader();
+  const text = 'First sentence here. Second sentence follows. Third ends it.';
+  const events = [];
+  reader.on('progress', (p) => events.push(p));
+  const startP = reader.start(text, { voice: 'v', maxChars: 500 });
+  provider.resolveAll();
+  await startP;
+  // Force known duration so char index can move with seek
+  // (FakeAudio from makeReader)
+  const a = reader.audio;
+  a.duration = 30;
+  a.currentTime = 0;
+  const before = reader._currentCharIndex();
+  reader.skipSentence(1);
+  const after = reader._currentCharIndex();
+  assert.ok(after >= before, 'should move forward or stay at boundary');
+  const last = events[events.length - 1];
+  assert.ok(last && typeof last.elapsedSec === 'number', 'progress includes elapsedSec');
+  assert.ok(last && typeof last.remainingSec === 'number', 'progress includes remainingSec');
+  assert.ok(typeof last.sentenceStart === 'number');
+});
+
+test('pause then resume keeps highlight position via progress charIndex', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { reader, provider, audio } = makeReader();
+  const startP = reader.start(LONG, { voice: 'v' });
+  provider.resolveAll();
+  await startP;
+  audio().duration = 20;
+  audio().currentTime = 5;
+  reader._emitProgress();
+  const atPause = reader._currentCharIndex();
+  reader.pause();
+  assert.strictEqual(reader.state, 'paused');
+  await reader.resume();
+  assert.strictEqual(reader.state, 'playing');
+  // Position unchanged on resume (currentTime still 5)
+  assert.strictEqual(reader._currentCharIndex(), atPause);
 });

@@ -272,23 +272,35 @@
     line-height: 1.75; white-space: pre-wrap; word-wrap: break-word;
   }
   .render-panel.visible { display: block; }
+  .hl-sent {
+    background: color-mix(in oklab, var(--accent) 14%, transparent);
+    border-radius: 4px;
+  }
   .hl {
     background: linear-gradient(135deg, var(--accent-soft), color-mix(in oklab, var(--accent2) 22%, transparent));
     border-radius: 6px; padding: 2px 4px;
   }
 
   .progress-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-  .progress-track { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; position: relative; }
+  .progress-track {
+    flex: 1; height: 8px; background: var(--border); border-radius: 4px;
+    overflow: hidden; position: relative; cursor: pointer;
+  }
   .progress-fill {
     height: 100%; width: 0%;
     background: linear-gradient(90deg, var(--accent), var(--accent2));
-    border-radius: 3px; transition: width .25s var(--ease);
+    border-radius: 4px; transition: width .15s var(--ease); pointer-events: none;
   }
   .progress-fill.shimmer::after {
     content: ''; position: absolute; inset: 0;
     background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
     animation: shimmer 1.6s ease-in-out infinite;
   }
+  .time-label {
+    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+    min-width: 3.2em; user-select: none;
+  }
+  .time-label.remaining { text-align: right; }
   @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 
   .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
@@ -639,13 +651,13 @@
     <span class="tm" data-i18n="app.tm">TextSpeak Pro&trade; by JojoLapin Inc.</span>
   </div>
   <div class="drag" id="titleDrag"></div>
-  <button class="win-btn" id="winMinimize" data-i18n-title="tb.minimize">
+  <button class="win-btn" id="winMinimize" data-i18n-title="tb.minimize" data-i18n="tb.minimize" data-i18n-attr="aria-label" aria-label="Minimize">
     <svg viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2"/></svg>
   </button>
-  <button class="win-btn" id="winMaximize" data-i18n-title="tb.maximize">
+  <button class="win-btn" id="winMaximize" data-i18n-title="tb.maximize" data-i18n="tb.maximize" data-i18n-attr="aria-label" aria-label="Maximize">
     <svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
   </button>
-  <button class="win-btn close" id="winClose" data-i18n-title="tb.close">
+  <button class="win-btn close" id="winClose" data-i18n-title="tb.close" data-i18n="tb.close" data-i18n-attr="aria-label" aria-label="Close">
     <svg viewBox="0 0 12 12">
       <line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/>
       <line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.2"/>
@@ -662,6 +674,7 @@
     <button class="chip" id="chipBookmarks"><span>&#128278;</span> <span data-i18n="hdr.bookmarks">Bookmarks</span></button>
     <button class="chip" id="chipDebug"><span>&#128030;</span> <span data-i18n="hdr.debug">Debug</span></button>
     <button class="chip" id="chipVoices"><span>&#127908;</span> <span data-i18n="hdr.voices">Voices</span></button>
+    <button class="chip" id="chipSmart" title="AI smart tools"><span>&#10024;</span> <span data-i18n="hdr.smart">Smart tools</span></button>
     <button class="chip chip-md" id="chipMarkdown" style="margin-left:auto" hidden title="Markdown-aware reading"><span>&#128196;</span> <span data-i18n="hdr.md">MD</span></button>
     <button class="chip" id="chipSettings"><span>&#9881;&#65039;</span> <span data-i18n="hdr.settings">Settings</span></button>
   </div>
@@ -686,9 +699,9 @@
   <div class="findbar" id="findBar">
     <input id="findInput" type="text" data-i18n="find.placeholder" data-i18n-attr="placeholder" />
     <span class="count" id="findCount"></span>
-    <button class="btn sm" id="findPrev">&uarr;</button>
-    <button class="btn sm" id="findNext">&darr;</button>
-    <button class="btn sm" id="findClose">&times;</button>
+    <button class="btn sm" id="findPrev" data-i18n="find.prev" data-i18n-attr="aria-label,title" aria-label="Previous match">&uarr;</button>
+    <button class="btn sm" id="findNext" data-i18n="find.next" data-i18n-attr="aria-label,title" aria-label="Next match">&darr;</button>
+    <button class="btn sm" id="findClose" data-i18n="find.close" data-i18n-attr="aria-label,title" aria-label="Close find">&times;</button>
   </div>
 
   <!-- Document tab bar -->
@@ -744,7 +757,11 @@
     <div id="render" class="render-panel"></div>
 
     <div class="progress-row">
-      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <span class="time-label" id="timeElapsed" title="Elapsed">0:00</span>
+      <div class="progress-track" id="progressTrack" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0" data-i18n-title="title.seek">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <span class="time-label remaining" id="timeRemaining" title="Remaining">-0:00</span>
     </div>
 
     <div class="stats">
@@ -765,6 +782,10 @@
       <button class="btn danger" id="stopBtn" disabled><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg><span data-i18n="btn.stop">Stop</span></button>
       <button class="btn warning" id="restartBtn" data-i18n-title="title.restart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg><span data-i18n="btn.restart">Restart</span></button>
       <button class="btn" id="skipBack" disabled data-i18n-title="title.skipBack"><span>&laquo;</span> <span data-i18n="btn.skipBack">-10s</span></button>
+      <button class="btn" id="prevSent" disabled data-i18n-title="title.prevSent"><span data-i18n="btn.prevSent">&#8592; Sent</span></button>
+      <button class="btn" id="nextSent" disabled data-i18n-title="title.nextSent"><span data-i18n="btn.nextSent">Sent &#8594;</span></button>
+      <button class="btn" id="prevPara" disabled data-i18n-title="title.prevPara"><span data-i18n="btn.prevPara">&#8592; &#182;</span></button>
+      <button class="btn" id="nextPara" disabled data-i18n-title="title.nextPara"><span data-i18n="btn.nextPara">&#182; &#8594;</span></button>
       <button class="btn" id="skipForward" disabled data-i18n-title="title.skipForward"><span data-i18n="btn.skipForward">+10s</span> <span>&raquo;</span></button>
     </div>
 
@@ -843,7 +864,11 @@
           <select id="openaiModel"></select>
         </div>
         <div class="setting">
-          <label><span data-i18n="openai.style">Voice style / instructions</span></label>
+          <label><span data-i18n="openai.stylePreset">Speaking style</span></label>
+          <select id="openaiStyle"></select>
+        </div>
+        <div class="setting">
+          <label><span data-i18n="openai.style">Custom instructions (optional)</span></label>
           <input type="text" id="openaiInstructions" spellcheck="false" data-i18n="openai.style.ph" data-i18n-attr="placeholder" placeholder="e.g. calm and warm, like a bedtime story">
         </div>
       </div>
@@ -868,7 +893,10 @@
       <span><kbd>Space</kbd> <span data-i18n="kb.pauseResume">Pause / Resume</span></span>
       <span><kbd>Esc</kbd> <span data-i18n="kb.stop">Stop</span></span>
       <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> <span data-i18n="kb.skip">Skip</span></span>
+      <span><kbd>[</kbd><kbd>]</kbd> <span data-i18n="kb.sentence">Sentence</span></span>
+      <span><kbd>Ctrl</kbd>+<kbd>&uarr;</kbd><kbd>&darr;</kbd> <span data-i18n="kb.paragraph">Paragraph</span></span>
       <span><kbd>Ctrl</kbd>+<kbd>F</kbd> <span data-i18n="kb.find">Find</span></span>
+      <button class="chip" id="shortcutsHelpBtn" data-i18n-attr="aria-label,title" data-i18n="kb.title" aria-label="Keyboard shortcuts" title="Keyboard shortcuts"><kbd>?</kbd></button>
     </div>
     <div><span data-i18n="app.tm">TextSpeak Pro&trade; by JojoLapin Inc.</span> &middot; <span data-i18n="app.copyright">&copy; 2026 JojoLapin Inc.</span></div>
   </footer>
@@ -1047,6 +1075,33 @@
     </div>
     <div style="color:var(--muted);font-size:12px;margin-top:6px" data-i18n="settings.openai.hint">Your key is stored locally on this device and is sent only to OpenAI to synthesize speech. You can also set OPENAI_API_KEY in a .env file next to the app.</div>
 
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.cache">Audio cache</div>
+    <div id="cacheSizeLabel" style="font-size:13px;color:var(--text-soft);margin-bottom:8px">—</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      <button class="btn sm" id="clearOpenAICacheBtn" data-i18n="settings.cache.clearOpenAI">Clear OpenAI cache</button>
+      <button class="btn sm" id="clearPiperCacheBtn" data-i18n="settings.cache.clearPiper">Clear Piper samples</button>
+      <button class="btn sm" id="clearTabCacheBtn" data-i18n="settings.cache.clearTab">Clear this tab's audio</button>
+      <button class="btn sm" id="clearAllCacheBtn" data-i18n="settings.cache.clearAll">Clear all cache</button>
+    </div>
+    <div style="color:var(--muted);font-size:12px;margin-top:6px" data-i18n="settings.cache.hint">Cached audio speeds up replay and export. Clearing cache never deletes your tab text.</div>
+
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.pron">Pronunciation</div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:8px" data-i18n="settings.pron.hint">Change how words are spoken without altering your text. Rules apply during playback and export.</div>
+    <div class="setting" style="margin-bottom:8px">
+      <label><span data-i18n="settings.pron.scope">Rules for</span></label>
+      <select id="pronScope">
+        <option value="global" data-i18n="settings.pron.scope.global">All documents (global)</option>
+        <option value="doc" data-i18n="settings.pron.scope.doc">This document only</option>
+      </select>
+    </div>
+    <div id="pronList" class="pron-list"></div>
+    <button class="btn sm" id="pronAddBtn" style="margin-top:8px" data-i18n="settings.pron.add">Add rule</button>
+    <div class="pron-preview">
+      <label style="font-size:12px;color:var(--text-soft)" data-i18n="settings.pron.preview">Preview</label>
+      <input type="text" id="pronPreviewIn" spellcheck="false" data-i18n="settings.pron.preview.ph" data-i18n-attr="placeholder" placeholder="Type a sentence to hear how it will be read...">
+      <div id="pronPreviewOut" class="pron-preview-out" aria-live="polite"></div>
+    </div>
+
     <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:20px;margin-bottom:8px" data-i18n="settings.presets">Presets</div>
     <div id="presetList"></div>
     <button class="btn sm" id="savePresetBtn" style="margin-top:10px" data-i18n="settings.preset.save">Save current as preset</button>
@@ -1077,6 +1132,90 @@
     <div class="indeterminate"></div>
     <div class="timing"><span data-i18n="export.elapsed">elapsed</span> <span id="exportElapsed">0s</span> &middot; <span data-i18n="export.eta">estimated total</span> <span id="exportEta">~?</span></div>
     <div class="actions"><button class="btn sm danger" id="exportCancel" data-i18n="export.cancel">Cancel</button></div>
+  </div>
+</div>
+
+<!-- ============================== Keyboard shortcuts ============================== -->
+<style>
+  /* Accessibility: always show a clear focus ring for keyboard users. */
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;scroll-behavior:auto !important}
+  }
+  #shortcutsOverlay .modal{max-width:560px}
+  .kbd-table{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;align-items:center;margin-top:8px}
+  .kbd-table .keys{white-space:nowrap;text-align:right}
+  .kbd-table .desc{color:var(--text-soft)}
+  .kbd-sec{grid-column:1 / -1;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-top:8px}
+</style>
+<div class="overlay" id="shortcutsOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+    <h3 id="shortcutsTitle" data-i18n="kb.title">Keyboard shortcuts</h3>
+    <div class="kbd-table">
+      <div class="kbd-sec" data-i18n="kb.sec.playback">Playback</div>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span><span class="desc" data-i18n="kb.play">Play</span>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></span><span class="desc" data-i18n="kb.fromCursor">From cursor</span>
+      <span class="keys"><kbd>Space</kbd></span><span class="desc" data-i18n="kb.pauseResume">Pause / Resume</span>
+      <span class="keys"><kbd>Esc</kbd></span><span class="desc" data-i18n="kb.stop">Stop</span>
+      <span class="keys"><kbd>&larr;</kbd> <kbd>&rarr;</kbd></span><span class="desc" data-i18n="kb.skip">Skip &plusmn;10s</span>
+      <span class="keys"><kbd>[</kbd> <kbd>]</kbd></span><span class="desc" data-i18n="kb.sentence">Sentence</span>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>&uarr;</kbd> <kbd>&darr;</kbd></span><span class="desc" data-i18n="kb.paragraph">Paragraph</span>
+      <div class="kbd-sec" data-i18n="kb.sec.tabs">Tabs</div>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>T</kbd></span><span class="desc" data-i18n="kb.newtab">New tab</span>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>W</kbd></span><span class="desc" data-i18n="kb.closetab">Close tab</span>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>Tab</kbd></span><span class="desc" data-i18n="kb.nexttab">Next / previous tab</span>
+      <div class="kbd-sec" data-i18n="kb.sec.other">Other</div>
+      <span class="keys"><kbd>Ctrl</kbd>+<kbd>F</kbd></span><span class="desc" data-i18n="kb.find">Find</span>
+      <span class="keys"><kbd>F1</kbd> / <kbd>?</kbd></span><span class="desc" data-i18n="kb.help">This help</span>
+    </div>
+    <div class="actions"><button class="btn primary sm" id="shortcutsClose" data-i18n="kb.close">Close</button></div>
+  </div>
+</div>
+
+<!-- ============================== Smart tools ============================== -->
+<style>
+  #smartOverlay .modal{max-width:640px;width:92%}
+  .smart-tasks{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  .smart-tasks .btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .smart-lang{margin:6px 0 10px}
+  .smart-io textarea{width:100%;min-height:120px;resize:vertical;font:inherit;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text)}
+  .smart-status{font-size:12px;color:var(--muted);min-height:18px;margin:6px 0}
+  .pron-list{display:flex;flex-direction:column;gap:8px}
+  .pron-rule{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+  .pron-rule input[type=text]{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font:inherit}
+  .pron-rule .pron-flags{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:12px;color:var(--text-soft)}
+  .pron-rule .pron-flags label{display:flex;align-items:center;gap:4px;cursor:pointer}
+  .pron-rule .pron-del{background:none;border:1px solid var(--border-strong);color:var(--danger);border-radius:6px;cursor:pointer;padding:4px 8px}
+  .pron-preview{margin-top:12px}
+  .pron-preview input{width:100%;padding:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font:inherit;margin-top:4px}
+  .pron-preview-out{margin-top:6px;padding:8px;border-radius:6px;background:var(--bg);color:var(--text-soft);font-size:13px;min-height:20px;white-space:pre-wrap}
+  .pron-empty{color:var(--muted);font-size:12px;font-style:italic}
+</style>
+<div class="overlay" id="smartOverlay">
+  <div class="modal">
+    <h3 data-i18n="smart.title">AI smart tools</h3>
+    <div class="sub" data-i18n="smart.sub">Transform your text with AI. The result opens in a new tab &mdash; your original is never changed.</div>
+    <div class="smart-tasks" id="smartTasks">
+      <button class="btn sm" data-task="clean" data-i18n="smart.task.clean">Clean up</button>
+      <button class="btn sm" data-task="summarize" data-i18n="smart.task.summarize">Summarize</button>
+      <button class="btn sm" data-task="explain" data-i18n="smart.task.explain">Explain simply</button>
+      <button class="btn sm" data-task="translate" data-i18n="smart.task.translate">Translate</button>
+    </div>
+    <div class="smart-lang setting" id="smartLangRow" hidden>
+      <label><span data-i18n="smart.lang">Translate into</span></label>
+      <input type="text" id="smartLang" spellcheck="false" data-i18n="smart.lang.ph" data-i18n-attr="placeholder" placeholder="e.g. French, Spanish, Japanese">
+    </div>
+    <div class="smart-status" id="smartStatus" aria-live="polite"></div>
+    <div class="smart-io">
+      <textarea id="smartResult" readonly data-i18n="smart.result.ph" data-i18n-attr="placeholder" placeholder="The result will appear here."></textarea>
+    </div>
+    <div class="actions" style="justify-content:space-between">
+      <button class="btn sm danger" id="smartRun" data-i18n="smart.run">Run</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn sm" id="smartAccept" disabled data-i18n="smart.accept">Open in new tab</button>
+        <button class="btn sm" id="smartClose" data-i18n="smart.close">Close</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1170,6 +1309,7 @@
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script src="lib/text-chunker.js"></script>
 <script src="lib/semantic-chunker.js"></script>
+<script src="lib/text-nav.js"></script>
 <script src="lib/providers.js"></script>
 <script src="lib/piper-reader.js"></script>
 <script src="lib/tabs.js"></script>

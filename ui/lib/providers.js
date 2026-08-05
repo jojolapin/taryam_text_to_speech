@@ -78,6 +78,7 @@
         instructions: opts.instructions,
         format: opts.format,
         textFormat: opts.textFormat || 'plain',
+        tabId: opts.tabId || '',
       });
       return { b64, mime };
     }

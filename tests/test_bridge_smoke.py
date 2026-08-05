@@ -40,6 +40,16 @@ class _DummySettings:
     def set(self, key, value) -> None:
         self._d[key] = value
 
+    def get_json(self, key, default):
+        import json as _json
+        raw = self._d.get(key)
+        if raw is None:
+            return default
+        try:
+            return _json.loads(raw)
+        except (TypeError, ValueError):
+            return default
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers (no Qt app needed)
@@ -99,3 +109,61 @@ def test_cancel_sets_download_event(qapp) -> None:
 
     bridge.cancel("dl-1")
     assert ev.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Pronunciation + speaking-style slots
+# ---------------------------------------------------------------------------
+
+def test_pronunciation_rules_seeded_from_settings(qapp) -> None:
+    import json
+    from app.bridge import Bridge
+    s = _DummySettings()
+    s.set("pronunciation_rules", json.dumps([{"from": "Dr", "to": "Doctor"}]))
+    bridge = Bridge(engine=object(), settings=s)
+    assert bridge._pron_rules == [{"from": "Dr", "to": "Doctor"}]
+
+
+def test_set_pronunciation_rules_applies_to_normalized_speech(qapp) -> None:
+    import json
+    from app.bridge import Bridge
+    bridge = Bridge(engine=object(), settings=_DummySettings())
+    bridge.set_pronunciation_rules(json.dumps([{"from": "NASA", "to": "N A S A"}]))
+    spoken = bridge._normalize_for_tts("Go NASA go", "plain")
+    assert spoken == "Go N A S A go"
+
+
+def test_set_pronunciation_rules_rejects_bad_json(qapp) -> None:
+    from app.bridge import Bridge
+    bridge = Bridge(engine=object(), settings=_DummySettings())
+    bridge.set_pronunciation_rules("{not json")
+    assert bridge._pron_rules == []
+
+
+def test_preview_pronunciation_returns_original_and_spoken(qapp) -> None:
+    import json
+    from app.bridge import Bridge
+    bridge = Bridge(engine=object(), settings=_DummySettings())
+    out = json.loads(bridge.preview_pronunciation(
+        "Hello Dr Smith", json.dumps([{"from": "Dr", "to": "Doctor"}]), "plain"))
+    assert out["original"] == "Hello Dr Smith"
+    assert out["spoken"] == "Hello Doctor Smith"
+
+
+def test_preview_pronunciation_does_not_change_stored_rules(qapp) -> None:
+    import json
+    from app.bridge import Bridge
+    bridge = Bridge(engine=object(), settings=_DummySettings())
+    bridge.preview_pronunciation("x", json.dumps([{"from": "x", "to": "y"}]), "plain")
+    # Preview uses the passed rules only; the active set stays empty.
+    assert bridge._pron_rules == []
+
+
+def test_speaking_styles_slot_lists_presets(qapp) -> None:
+    import json
+    from app.bridge import Bridge
+    bridge = Bridge(engine=object(), settings=_DummySettings())
+    data = json.loads(bridge.speaking_styles())
+    assert data["default"] == "neutral"
+    ids = {p["id"] for p in data["presets"]}
+    assert {"neutral", "narration", "calm"} <= ids

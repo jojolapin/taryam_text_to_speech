@@ -43,8 +43,10 @@
       'openai.badge.ai': 'AI voice (OpenAI)',
       'openai.badge.net': 'Requires internet \u00b7 may incur charges',
       'openai.model': 'Model',
-      'openai.style': 'Voice style / instructions',
+      'openai.style': 'Custom instructions (optional)',
+      'openai.stylePreset': 'Speaking style',
       'openai.style.ph': 'e.g. calm and warm, like a bedtime story',
+      'hdr.smart': 'Smart tools',
       'openai.configured': 'Configured',
       'openai.notConfigured': 'API key not configured',
       'openai.openSettings': 'Add API key',
@@ -62,6 +64,51 @@
       'settings.openai.model': 'Default model',
       'settings.openai.baseurl': 'Base URL (optional)',
       'settings.openai.hint': 'Your key is stored locally on this device and is sent only to OpenAI to synthesize speech. You can also set OPENAI_API_KEY in a .env file next to the app.',
+      'settings.cache': 'Audio cache',
+      'settings.cache.size': 'Total {total} \u2014 OpenAI {openai}, Piper samples {piper}',
+      'settings.cache.sizeUnknown': 'Cache size unavailable',
+      'settings.cache.clearOpenAI': 'Clear OpenAI cache',
+      'settings.cache.clearPiper': 'Clear Piper samples',
+      'settings.cache.clearTab': 'Clear this tab\u2019s audio',
+      'settings.cache.clearAll': 'Clear all cache',
+      'settings.cache.hint': 'Cached audio speeds up replay and export. Clearing cache never deletes your tab text.',
+      'settings.pron': 'Pronunciation',
+      'settings.pron.hint': 'Change how words are spoken without altering your text. Rules apply during playback and export.',
+      'settings.pron.scope': 'Rules for',
+      'settings.pron.scope.global': 'All documents (global)',
+      'settings.pron.scope.doc': 'This document only',
+      'settings.pron.add': 'Add rule',
+      'settings.pron.from': 'Written',
+      'settings.pron.to': 'Spoken as',
+      'settings.pron.enabled': 'On',
+      'settings.pron.wholeword': 'Whole word',
+      'settings.pron.case': 'Match case',
+      'settings.pron.regex': 'Regex',
+      'settings.pron.delete': 'Delete rule',
+      'settings.pron.empty': 'No rules yet. Add one to change how a word is read.',
+      'settings.pron.preview': 'Preview',
+      'settings.pron.preview.ph': 'Type a sentence to hear how it will be read...',
+      'smart.title': 'AI smart tools',
+      'smart.sub': 'Transform your text with AI. The result opens in a new tab \u2014 your original is never changed.',
+      'smart.task.clean': 'Clean up',
+      'smart.task.summarize': 'Summarize',
+      'smart.task.explain': 'Explain simply',
+      'smart.task.translate': 'Translate',
+      'smart.lang': 'Translate into',
+      'smart.lang.ph': 'e.g. French, Spanish, Japanese',
+      'smart.run': 'Run',
+      'smart.accept': 'Open in new tab',
+      'smart.close': 'Close',
+      'smart.result.ph': 'The result will appear here.',
+      'smart.working': 'Working with AI...',
+      'smart.done': 'Done. Review the result, then open it in a new tab.',
+      'smart.failed': 'The AI request failed.',
+      'smart.opened': 'Result opened in a new tab.',
+      'smart.needKey': 'Add an OpenAI API key in Settings to use smart tools.',
+      'smart.needLang': 'Enter a target language.',
+      'settings.cache.cleared': 'Cleared {count} file(s) ({size}).',
+      'settings.cache.clearFailed': 'Could not clear the cache.',
+      'settings.cache.noTab': 'No active tab to clear.',
       'progress.section': 'Section {n} of {m}',
 
       // Status banner states
@@ -97,11 +144,20 @@
       'btn.restart': 'Restart',
       'btn.skipBack': '-10s',
       'btn.skipForward': '+10s',
+      'btn.prevSent': '\u2190 Sent',
+      'btn.nextSent': 'Sent \u2192',
+      'btn.prevPara': '\u2190 \u00b6',
+      'btn.nextPara': '\u00b6 \u2192',
       'btn.find': 'Find',
       'title.fromCursor': 'Start reading from the cursor position',
       'title.restart': 'Stop and restart from the very beginning',
       'title.skipBack': 'Skip back 10 seconds',
       'title.skipForward': 'Skip forward 10 seconds',
+      'title.prevSent': 'Previous sentence',
+      'title.nextSent': 'Next sentence',
+      'title.prevPara': 'Previous paragraph',
+      'title.nextPara': 'Next paragraph',
+      'title.seek': 'Seek in the reading',
 
       // Export row
       'exp.download': 'Export audio',
@@ -110,6 +166,8 @@
       'exp.bitrate': 'Bitrate',
       'exp.hint': 'Saves the entire text as an audio file.',
       'exp.batchHint': 'One file per paragraph (blank line = new paragraph).',
+      'exp.selection': 'Exporting the selected text only.',
+      'exp.batch.openaiUnavailable': 'Batch export is available with Piper only.',
 
       // Settings grid
       'set.voice': 'Voice',
@@ -127,7 +185,18 @@
       'kb.pauseResume': 'Pause / Resume',
       'kb.stop': 'Stop',
       'kb.skip': 'Skip \u00b110s',
+      'kb.sentence': 'Sentence',
+      'kb.paragraph': 'Paragraph',
       'kb.find': 'Find',
+      'kb.title': 'Keyboard shortcuts',
+      'kb.sec.playback': 'Playback',
+      'kb.sec.tabs': 'Tabs',
+      'kb.sec.other': 'Other',
+      'kb.newtab': 'New tab',
+      'kb.closetab': 'Close tab',
+      'kb.nexttab': 'Next / previous tab',
+      'kb.help': 'This help',
+      'kb.close': 'Close',
 
       // Import panel
       'imp.title': 'Import text',
@@ -231,6 +300,7 @@
       // Export overlay
       'export.title': 'Generating audio\u2026',
       'export.synth': 'Synthesizing {chars} characters with Piper',
+      'export.synth.openai': 'Synthesizing {chars} characters with OpenAI',
       'export.elapsed': 'elapsed',
       'export.eta': 'estimated total',
       'export.cancel': 'Cancel',
@@ -240,6 +310,9 @@
       // Find
       'find.placeholder': 'Find in text\u2026',
       'find.count': '{current} / {total}',
+      'find.prev': 'Previous match',
+      'find.next': 'Next match',
+      'find.close': 'Close find',
 
       // First-run wizard
       'wiz.welcome': 'Welcome to TextSpeak Pro',
@@ -314,8 +387,10 @@
       'openai.badge.ai': 'Voix IA (OpenAI)',
       'openai.badge.net': 'N\u00e9cessite Internet \u00b7 peut engendrer des frais',
       'openai.model': 'Mod\u00e8le',
-      'openai.style': 'Style de voix / instructions',
+      'openai.style': 'Instructions personnalis\u00e9es (facultatif)',
+      'openai.stylePreset': 'Style de narration',
       'openai.style.ph': 'ex. calme et chaleureux, comme une histoire du soir',
+      'hdr.smart': 'Outils IA',
       'openai.configured': 'Configur\u00e9',
       'openai.notConfigured': 'Cl\u00e9 API non configur\u00e9e',
       'openai.openSettings': 'Ajouter une cl\u00e9 API',
@@ -333,6 +408,51 @@
       'settings.openai.model': 'Mod\u00e8le par d\u00e9faut',
       'settings.openai.baseurl': 'URL de base (optionnel)',
       'settings.openai.hint': 'Votre cl\u00e9 est stock\u00e9e localement sur cet appareil et n\u2019est envoy\u00e9e qu\u2019\u00e0 OpenAI pour synth\u00e9tiser la parole. Vous pouvez aussi d\u00e9finir OPENAI_API_KEY dans un fichier .env plac\u00e9 pr\u00e8s de l\u2019application.',
+      'settings.cache': 'Cache audio',
+      'settings.cache.size': 'Total {total} \u2014 OpenAI {openai}, \u00e9chantillons Piper {piper}',
+      'settings.cache.sizeUnknown': 'Taille du cache indisponible',
+      'settings.cache.clearOpenAI': 'Vider le cache OpenAI',
+      'settings.cache.clearPiper': 'Vider les \u00e9chantillons Piper',
+      'settings.cache.clearTab': 'Vider l\u2019audio de cet onglet',
+      'settings.cache.clearAll': 'Tout vider',
+      'settings.cache.hint': 'Le cache acc\u00e9l\u00e8re la lecture et l\u2019export. Le vider ne supprime jamais le texte des onglets.',
+      'settings.pron': 'Prononciation',
+      'settings.pron.hint': 'Modifiez la fa\u00e7on dont les mots sont prononc\u00e9s sans changer votre texte. Les r\u00e8gles s\u2019appliquent \u00e0 la lecture et \u00e0 l\u2019export.',
+      'settings.pron.scope': 'R\u00e8gles pour',
+      'settings.pron.scope.global': 'Tous les documents (global)',
+      'settings.pron.scope.doc': 'Ce document uniquement',
+      'settings.pron.add': 'Ajouter une r\u00e8gle',
+      'settings.pron.from': '\u00c9crit',
+      'settings.pron.to': 'Prononc\u00e9',
+      'settings.pron.enabled': 'Activ\u00e9e',
+      'settings.pron.wholeword': 'Mot entier',
+      'settings.pron.case': 'Respecter la casse',
+      'settings.pron.regex': 'Regex',
+      'settings.pron.delete': 'Supprimer la r\u00e8gle',
+      'settings.pron.empty': 'Aucune r\u00e8gle. Ajoutez-en une pour changer la lecture d\u2019un mot.',
+      'settings.pron.preview': 'Aper\u00e7u',
+      'settings.pron.preview.ph': 'Tapez une phrase pour entendre comment elle sera lue...',
+      'smart.title': 'Outils IA',
+      'smart.sub': 'Transformez votre texte avec l\u2019IA. Le r\u00e9sultat s\u2019ouvre dans un nouvel onglet \u2014 votre original n\u2019est jamais modifi\u00e9.',
+      'smart.task.clean': 'Nettoyer',
+      'smart.task.summarize': 'R\u00e9sumer',
+      'smart.task.explain': 'Expliquer simplement',
+      'smart.task.translate': 'Traduire',
+      'smart.lang': 'Traduire en',
+      'smart.lang.ph': 'ex. fran\u00e7ais, espagnol, japonais',
+      'smart.run': 'Lancer',
+      'smart.accept': 'Ouvrir dans un nouvel onglet',
+      'smart.close': 'Fermer',
+      'smart.result.ph': 'Le r\u00e9sultat appara\u00eetra ici.',
+      'smart.working': 'Traitement par l\u2019IA...',
+      'smart.done': 'Termin\u00e9. V\u00e9rifiez le r\u00e9sultat, puis ouvrez-le dans un nouvel onglet.',
+      'smart.failed': 'La requ\u00eate IA a \u00e9chou\u00e9.',
+      'smart.opened': 'R\u00e9sultat ouvert dans un nouvel onglet.',
+      'smart.needKey': 'Ajoutez une cl\u00e9 API OpenAI dans les R\u00e9glages pour utiliser les outils IA.',
+      'smart.needLang': 'Indiquez une langue cible.',
+      'settings.cache.cleared': '{count} fichier(s) supprim\u00e9(s) ({size}).',
+      'settings.cache.clearFailed': 'Impossible de vider le cache.',
+      'settings.cache.noTab': 'Aucun onglet actif \u00e0 vider.',
       'progress.section': 'Section {n} sur {m}',
 
       'status.ready': 'Pr\u00eat \u2014 collez ou tapez votre texte, puis appuyez sur Lire.',
@@ -363,11 +483,20 @@
       'btn.restart': 'Recommencer',
       'btn.skipBack': '-10s',
       'btn.skipForward': '+10s',
+      'btn.prevSent': '\u2190 Phr.',
+      'btn.nextSent': 'Phr. \u2192',
+      'btn.prevPara': '\u2190 \u00b6',
+      'btn.nextPara': '\u00b6 \u2192',
       'btn.find': 'Rechercher',
       'title.fromCursor': 'D\u00e9marrer la lecture \u00e0 la position du curseur',
       'title.restart': 'Arr\u00eater et relire depuis le d\u00e9but',
       'title.skipBack': 'Reculer de 10 secondes',
       'title.skipForward': 'Avancer de 10 secondes',
+      'title.prevSent': 'Phrase pr\u00e9c\u00e9dente',
+      'title.nextSent': 'Phrase suivante',
+      'title.prevPara': 'Paragraphe pr\u00e9c\u00e9dent',
+      'title.nextPara': 'Paragraphe suivant',
+      'title.seek': 'Se d\u00e9placer dans la lecture',
 
       'exp.download': 'Exporter l\'audio',
       'exp.batch': 'Export par lot',
@@ -375,6 +504,8 @@
       'exp.bitrate': 'D\u00e9bit',
       'exp.hint': 'Enregistre tout le texte dans un fichier audio.',
       'exp.batchHint': 'Un fichier par paragraphe (ligne vide = nouveau paragraphe).',
+      'exp.selection': 'Export de la s\u00e9lection uniquement.',
+      'exp.batch.openaiUnavailable': 'L\u2019export par lot est disponible uniquement avec Piper.',
 
       'set.voice': 'Voix',
       'set.speed': 'Vitesse',
@@ -390,7 +521,18 @@
       'kb.pauseResume': 'Pause / Reprise',
       'kb.stop': 'Arr\u00eater',
       'kb.skip': 'Saut \u00b110s',
+      'kb.sentence': 'Phrase',
+      'kb.paragraph': 'Paragraphe',
       'kb.find': 'Rechercher',
+      'kb.title': 'Raccourcis clavier',
+      'kb.sec.playback': 'Lecture',
+      'kb.sec.tabs': 'Onglets',
+      'kb.sec.other': 'Autres',
+      'kb.newtab': 'Nouvel onglet',
+      'kb.closetab': 'Fermer l\u2019onglet',
+      'kb.nexttab': 'Onglet suivant / pr\u00e9c\u00e9dent',
+      'kb.help': 'Cette aide',
+      'kb.close': 'Fermer',
 
       'imp.title': 'Importer du texte',
       'imp.drop': 'Glissez un fichier ici ou cliquez pour parcourir',
@@ -486,6 +628,7 @@
 
       'export.title': 'G\u00e9n\u00e9ration de l\'audio\u2026',
       'export.synth': 'Synth\u00e8se de {chars} caract\u00e8res avec Piper',
+      'export.synth.openai': 'Synth\u00e8se de {chars} caract\u00e8res avec OpenAI',
       'export.elapsed': '\u00e9coul\u00e9',
       'export.eta': 'estimation totale',
       'export.cancel': 'Annuler',
@@ -494,6 +637,9 @@
 
       'find.placeholder': 'Rechercher dans le texte\u2026',
       'find.count': '{current} / {total}',
+      'find.prev': 'R\u00e9sultat pr\u00e9c\u00e9dent',
+      'find.next': 'R\u00e9sultat suivant',
+      'find.close': 'Fermer la recherche',
 
       'wiz.welcome': 'Bienvenue dans TextSpeak Pro',
       'wiz.welcome.body':
@@ -557,10 +703,20 @@
       if (!key) return;
       const mode = el.getAttribute('data-i18n-attr');
       const val = t(key);
-      if (mode === 'placeholder') el.placeholder = val;
-      else if (mode === 'title') el.title = val;
-      else if (mode === 'html') el.innerHTML = val;
-      else el.textContent = val;
+      if (mode) {
+        // Comma-separated list so one key can localize e.g. "aria-label,title".
+        mode.split(',').forEach((raw) => {
+          const m = raw.trim();
+          if (!m) return;
+          if (m === 'placeholder') el.placeholder = val;
+          else if (m === 'title') el.title = val;
+          else if (m === 'html') el.innerHTML = val;
+          else if (m === 'text') el.textContent = val;
+          else el.setAttribute(m, val); // aria-label, aria-*, etc.
+        });
+      } else {
+        el.textContent = val;
+      }
     });
     document.querySelectorAll('[data-i18n-title]').forEach((el) => {
       el.title = t(el.getAttribute('data-i18n-title'));
