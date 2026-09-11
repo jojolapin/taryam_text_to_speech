@@ -8,6 +8,7 @@ falls back to the native backend (registry on Windows).
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from PySide6.QtCore import QSettings
@@ -68,7 +69,7 @@ class Settings:
     """Thin typed wrapper around QSettings."""
 
     def __init__(self) -> None:
-        if app_paths.is_portable():
+        if app_paths.is_portable() or os.environ.get("TEXTSPEAK_DATA_DIR"):
             self._q = QSettings(str(app_paths.settings_ini()), QSettings.Format.IniFormat)
         else:
             self._q = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope, APP_ORG_DIR, APP_NAME)

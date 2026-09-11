@@ -46,7 +46,7 @@ from app import APP_NAME, APP_ORG_DIR, APP_VERSION
 from app import logging_setup
 from app import paths as app_paths
 from app.bridge import Bridge
-from app.main_window import MainWindow
+from app.native_window import MainWindow
 from app.settings import Settings
 
 
@@ -61,6 +61,15 @@ def _acquire_single_instance_lock() -> QLockFile | None:
 
 
 def main() -> int:
+    if "--self-test" in sys.argv or "--self-test-migration" in sys.argv:
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--self-test", action="store_true")
+        parser.add_argument("--self-test-migration", action="store_true")
+        parser.add_argument("--data-dir", required=True)
+        parser.add_argument("--voice-dir")
+        args = parser.parse_args()
+        os.environ["TEXTSPEAK_DATA_DIR"] = os.path.abspath(args.data_dir)
     logging_setup.install()
 
     QApplication.setOrganizationName(APP_ORG_DIR)
@@ -70,7 +79,17 @@ def main() -> int:
     QApplication.setApplicationVersion(APP_VERSION)
 
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")  # Consistent palette support, including dark mode.
     app.setQuitOnLastWindowClosed(True)
+
+    if "--self-test-migration" in sys.argv:
+        from app.qa_smoke import verify_migration
+        settings = Settings()
+        return verify_migration(app, settings, Bridge(settings=settings), args.data_dir)
+    if "--self-test" in sys.argv:
+        from app.qa_smoke import run
+        settings = Settings()
+        return run(app, settings, Bridge(settings=settings), args.data_dir, args.voice_dir)
 
     # Single-instance lock (best-effort; a missing lock just means second-instance will open too)
     lock = _acquire_single_instance_lock()

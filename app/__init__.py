@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 APP_NAME = "TextSpeak Pro"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0-rc.3"
 APP_AUTHOR = "JojoLapin Inc."
+APP_TRADEMARK = f"{APP_NAME}™ by {APP_AUTHOR}"
 APP_YEAR = "2026"
 APP_COPYRIGHT = f"(C) {APP_YEAR} {APP_AUTHOR}"
 APP_TAGLINE = "Offline neural text-to-speech reader"

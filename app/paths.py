@@ -78,7 +78,8 @@ def _installed_user_dir() -> Path:
 
 
 def user_data_dir() -> Path:
-    p = _exe_dir() if is_portable() else _installed_user_dir()
+    override = os.environ.get("TEXTSPEAK_DATA_DIR", "").strip()
+    p = Path(override).resolve() if override else (_exe_dir() if is_portable() else _installed_user_dir())
     p.mkdir(parents=True, exist_ok=True)
     return p
 

@@ -11,8 +11,10 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
+import tempfile
 import wave
 from pathlib import Path
 from threading import Lock
@@ -22,6 +24,7 @@ from . import paths as app_paths
 
 
 log = logging.getLogger("textspeak.engine")
+_SYNTHESIS_LOCK = Lock()  # Piper's process-global espeak voice is mutable.
 
 
 class PiperMissingError(RuntimeError):
@@ -96,9 +99,9 @@ class CancelToken:
 class TTSEngine:
     """Stateful wrapper around ``piper.PiperVoice``.
 
-    Thread-safety: ``get_voice`` and ``discover_voices`` are protected by a
-    lock. Synthesis itself is not serialised: Piper releases the GIL in the
-    ONNX runtime, so multiple workers can run concurrently.
+    Voice loading is protected by an instance lock. Synthesis is serialized
+    across instances because Piper's espeak phonemizer changes global voice
+    state. The lock is acquired on workers, never on the GUI thread.
     """
 
     def __init__(self) -> None:
@@ -191,11 +194,14 @@ class TTSEngine:
 
     def synthesize_wav_bytes(self, text: str, voice_id: str, length_scale: float = 1.0,
                              volume: float = 1.0, token: Optional[CancelToken] = None) -> bytes:
-        voice = self.get_voice(voice_id)
-        cfg = self._synth_config(length_scale, volume)
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file, syn_config=cfg)
+        with _SYNTHESIS_LOCK:
+            if token and token.cancelled:
+                raise KeyboardInterrupt("cancelled")
+            voice = self.get_voice(voice_id)
+            cfg = self._synth_config(length_scale, volume)
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wav_file:
+                voice.synthesize_wav(text, wav_file, syn_config=cfg)
         if token and token.cancelled:
             raise KeyboardInterrupt("cancelled")
         return buf.getvalue()
@@ -222,11 +228,17 @@ class TTSEngine:
         enc = lameenc.Encoder()
         enc.set_bit_rate(bitrate)
         enc.set_in_sample_rate(sample_rate)
+        # Low-rate Piper voices otherwise use MPEG-2, whose bitrate tops out at
+        # 160 kbps. Let LAME resample to MPEG-1 so 192/256/320 are honored.
+        if bitrate > 160 and sample_rate < 32000:
+            enc.set_out_sample_rate(44100)
         enc.set_channels(channels)
         enc.set_quality(2)
-        mp3 = enc.encode(pcm)
-        mp3 += enc.flush()
-        return bytes(mp3)
+        # Feed bounded PCM blocks: lameenc sizes each output buffer from input
+        # samples, which can be insufficient for one large upsampling call.
+        encoded = [enc.encode(pcm[offset:offset + 2048]) for offset in range(0, len(pcm), 2048)]
+        encoded.append(enc.flush())
+        return b"".join(encoded)
 
     def encode_wav(self, pcm: bytes, sample_rate: int, channels: int) -> bytes:
         buf = io.BytesIO()
@@ -253,8 +265,7 @@ class TTSEngine:
             )
             return proc.stdout
         except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            log.warning("oggenc unavailable (%s); falling back to WAV-in-OGG container", e)
-            return self.encode_wav(pcm, sample_rate, channels)
+            raise RuntimeError("OGG export needs the optional oggenc encoder. Use WAV or MP3 instead.") from e
 
     # ---- high-level exports ----
 
@@ -265,7 +276,19 @@ class TTSEngine:
         """Synthesize + encode the full text. Returns (data, audio_seconds, sample_rate, channels)."""
         if progress:
             progress("synth", 0.0)
-        pcm, sr, channels = self.synthesize_pcm(text, voice_id, length_scale, volume)
+        from .chunking import chunk
+        parts = chunk(text, 1000)
+        if not parts:
+            raise ValueError("There is no text to export.")
+        pcm_parts = []
+        for index, part in enumerate(parts):
+            if token and token.cancelled:
+                raise KeyboardInterrupt("cancelled")
+            pcm_part, sr, channels = self.synthesize_pcm(part["text"], voice_id, length_scale, volume)
+            pcm_parts.append(pcm_part)
+            if progress:
+                progress("synth", .65 * (index + 1) / len(parts))
+        pcm = b"".join(pcm_parts)
         if token and token.cancelled:
             raise KeyboardInterrupt("cancelled")
         if progress:
@@ -285,6 +308,20 @@ class TTSEngine:
 
 def write_mp3_with_tags(path: Path, mp3_bytes: bytes, *, title: str = "", artist: str = "",
                         album: str = "TextSpeak Pro", comment: str = "") -> None:
+    """Stage tagged MP3 data beside the destination before replacing it."""
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix="." + path.stem, suffix=".mp3", dir=path.parent)
+    os.close(fd)
+    try:
+        _write_mp3_with_tags(Path(temporary), mp3_bytes, title=title, artist=artist, album=album, comment=comment)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _write_mp3_with_tags(path: Path, mp3_bytes: bytes, *, title: str = "", artist: str = "",
+                         album: str = "TextSpeak Pro", comment: str = "") -> None:
     """Write ``mp3_bytes`` to ``path`` and stamp ID3v2 tags."""
     path.write_bytes(mp3_bytes)
     try:

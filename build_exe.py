@@ -103,9 +103,10 @@ def main() -> int:
     print(f"[build] Working in: {ROOT}")
     _preflight()
 
-    # Clean previous artifacts
-    if BUILD.exists(): shutil.rmtree(BUILD, ignore_errors=True)
-    if DIST.exists():  shutil.rmtree(DIST,  ignore_errors=True)
+    # PyInstaller cleans its own work area. Never delete the whole output folder:
+    # portable installations can contain voices, documents and settings there.
+    BUILD.mkdir(parents=True, exist_ok=True)
+    DIST.mkdir(parents=True, exist_ok=True)
 
     _ensure_icon()
     _run_pyinstaller()

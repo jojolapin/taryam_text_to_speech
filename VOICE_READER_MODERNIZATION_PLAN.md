@@ -1,5 +1,9 @@
 # Voice Reader Pro — Modernization Plan (TextSpeak Pro)
 
+> Historical v1.1.0 document. For the native v1.2 release candidate, see
+> ENGINEERING_REVIEW.md and RELEASE_VALIDATION.md. The completion claims below
+> describe the previous implementation and are not acceptance evidence for this candidate.
+
 > **Analysis pass only. No production code was changed to produce this document.**
 > Evidence-based plan derived from reading the actual repository, running the
 > test suite, and verifying the runtime environment.

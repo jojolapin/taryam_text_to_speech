@@ -3,7 +3,18 @@
 
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
 from pathlib import Path
+
+# Dependency discovery must not bundle unrelated DLLs from tools on PATH.
+# In particular, a Poppler ICU DLL has versioned symbols incompatible with the
+# Windows ICU API used by Qt 6.11. Keep discovery inside Python/Qt and Windows.
+if sys.platform.startswith('win'):
+    _windows = Path(os.environ.get('SystemRoot', r'C:\Windows'))
+    os.environ['PATH'] = os.pathsep.join(map(str, [
+        Path(sys.prefix), Path(sys.prefix) / 'Scripts', Path(sys.base_prefix),
+        _windows / 'System32', _windows,
+    ]))
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs
 
@@ -59,10 +70,13 @@ if _piper_spec and _piper_spec.origin:
 # Bundled app resources.
 # ---------------------------------------------------------------------------
 datas = [
+    (str(ROOT / 'LICENSE'), 'licenses'),
+    (str(ROOT / 'NOTICE'), 'licenses'),
     (str(ROOT / 'ui' / 'index.html'),           'ui'),
     (str(ROOT / 'ui' / 'app.js'),               'ui'),
     (str(ROOT / 'ui' / 'i18n.js'),              'ui'),
     (str(ROOT / 'ui' / 'lib' / 'text-chunker.js'),     'ui/lib'),
+    (str(ROOT / 'ui' / 'lib' / 'text-nav.js'),         'ui/lib'),
     (str(ROOT / 'ui' / 'lib' / 'semantic-chunker.js'), 'ui/lib'),
     (str(ROOT / 'ui' / 'lib' / 'providers.js'),        'ui/lib'),
     (str(ROOT / 'ui' / 'lib' / 'piper-reader.js'), 'ui/lib'),
@@ -80,6 +94,7 @@ hiddenimports = [
     'PySide6.QtCore',
     'PySide6.QtGui',
     'PySide6.QtWidgets',
+    'PySide6.QtMultimedia',
     'PySide6.QtWebChannel',
     'PySide6.QtWebEngineCore',
     'PySide6.QtWebEngineWidgets',
@@ -101,7 +116,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / 'app' / 'frozen_diagnostics.py')],
     excludes=['tkinter', 'PyQt5', 'PyQt6', 'matplotlib', 'numpy.testing'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

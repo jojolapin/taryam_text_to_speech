@@ -15,6 +15,7 @@ __pycache__/
 # PyInstaller / local build outputs
 build/
 dist/
+/dist - Copy/
 
 # Secrets / local config (never commit real keys)
 .env

@@ -6,10 +6,16 @@
 ; optional desktop icon, and a proper uninstaller.
 
 #define MyAppName        "TextSpeak Pro"
-#define MyAppVersion     "1.1.0"
+#define MyAppVersion     "1.2.0-rc.3"
 #define MyAppPublisher   "JojoLapin Inc."
 #define MyAppURL         "https://github.com/"
 #define MyAppExeName     "TextSpeakPro.exe"
+#ifndef MyAppSource
+  #define MyAppSource    "..\dist\branded-candidate\TextSpeakPro.exe"
+#endif
+#if GetFileVersion(MyAppSource) != "1.2.0.0"
+  #error The input executable must be the tested 1.2.0 candidate, not an older build.
+#endif
 #define MyAppTM          "TextSpeak Pro(TM)"
 #define MyAppCopyright   "(C) 2026 JojoLapin Inc. All rights reserved."
 
@@ -17,7 +23,7 @@
 AppId={{C3F46CCD-5B7E-4F2D-93F1-6E9B7F5DE2CA}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-VersionInfoVersion={#MyAppVersion}.0
+VersionInfoVersion=1.2.0.0
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
@@ -44,7 +50,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked; OnlyBelowVersion: 6.1
 
 [Files]
-Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyAppSource}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
