@@ -108,6 +108,7 @@ historical modernization-plan pointer. Legacy JS and existing tests remain intac
 | Light/dark visual inspection | Native screenshots inspected; dark rendering corrected |
 | Packaged rc.3 executable / real audio | Six smoke checks passed, exit 0, no errors; `build/qa/trademark-packaged/smoke-result.json` |
 | Packaged legacy migration (rc.1) | Passed, exit 0; `build/qa/packaged-migration/migration-result.json` |
+| Windows installer / uninstaller | Passed in a temporary folder on this machine; exact executable hash, notices, registration removal and user-file preservation verified by `tools/qa_installer.py` |
 
 Voice checks: en_US-joe-medium, en_US-kathleen-low, en_US-lessac-medium,
 en_US-ryan-high, fr_FR-siwis-low, fr_FR-siwis-medium. The low French model logged
@@ -126,8 +127,14 @@ to the build's Python environment and Windows directories. Rebuilding resolved t
 QtCore startup failure. An early startup diagnostic hook preserves future errors.
 The separate portable ZIP contains the candidate, portable flag, license notices and
 reports; SHA-256 files identify both artifacts. Existing distribution files are preserved.
-The Inno Setup compiler was not found on PATH; no installer acceptance is claimed.
-Its script targets the candidate and rejects an executable with the old version.
+Inno Setup compiled `dist/installer/TextSpeakPro-Setup-1.2.0-rc.3.exe` successfully.
+The installer defaults to the current Windows user, supports an optional desktop
+shortcut, includes license notices and preserves the existing profile. The script
+targets the branded candidate and rejects an executable with the old version.
+Actual installation and uninstall passed in an isolated project folder, including
+installed-executable checksum equality, registration removal and preservation of
+a user-created file. Evidence: `build/qa/installer-wo42o_11/result.json`.
+The installer is unsigned; no code-signing certificate was configured.
 
 ## 12. Remaining issues / explicit limits
 
@@ -140,7 +147,7 @@ Its script targets the candidate and rejects an executable with the old version.
 - Native UI does not reproduce every legacy convenience: saved voice-preset UI,
   browser MediaSession headset bindings and time-based seeking remain legacy-only.
 - Passage highlighting and saved passage starts are intentional; no fabricated word timings.
-- A second clean Windows machine and installer installation/uninstallation are untested.
+- A second clean Windows machine, all-users installation and interactive installer wizard checks remain untested; current-user silent install/uninstall passed on this machine.
 - TXT import limit is 32 MB; the largest automated editor fixture is much smaller.
 - Generated executables, user profiles and distribution backups are excluded from Git; the repository contains application source, tests and build recipes.
 

@@ -8,7 +8,7 @@
 #define MyAppName        "TextSpeak Pro"
 #define MyAppVersion     "1.2.0-rc.3"
 #define MyAppPublisher   "JojoLapin Inc."
-#define MyAppURL         "https://github.com/"
+#define MyAppURL         "https://github.com/jojolapin/taryam_text_to_speech"
 #define MyAppExeName     "TextSpeakPro.exe"
 #ifndef MyAppSource
   #define MyAppSource    "..\dist\branded-candidate\TextSpeakPro.exe"
@@ -32,12 +32,19 @@ DefaultDirName={autopf}\TextSpeak Pro
 DefaultGroupName=TextSpeak Pro
 DisableProgramGroupPage=yes
 DisableDirPage=no
+OutputDir=..\dist\installer
 OutputBaseFilename=TextSpeakPro-Setup-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+MinVersion=10.0
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline dialog
+CloseApplications=no
+RestartApplications=no
+LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\resources\icon.ico
 
@@ -47,10 +54,11 @@ Name: "french";  MessagesFile: "compiler:Languages\French.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked; OnlyBelowVersion: 6.1
 
 [Files]
 Source: "{#MyAppSource}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

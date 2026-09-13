@@ -103,6 +103,21 @@ Legacy web resources remain bundled for migration/rollback; the primary editor i
 
 ## Tests and builds
 
+The Windows installer is `dist/installer/TextSpeakPro-Setup-1.2.0-rc.3.exe`.
+It defaults to installing for the current user, offers an optional desktop shortcut,
+and includes an uninstaller. Installed documents, preferences and voices stay in
+the existing user profile. Quit the tray copy before installing and launching.
+This release candidate is not code-signed.
+
+To rebuild the installer after building the branded executable:
+
+```powershell
+& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\TextSpeakPro.iss
+```
+
+`tools/qa_installer.py` tests installation and removal in a temporary project folder;
+it refuses to run over an existing registered TextSpeak Pro installation.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 node --test tests/js/*.test.js
