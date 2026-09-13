@@ -1,68 +1,27 @@
 @echo off
-rem ============================================================
-rem  TextSpeak Pro - Windows developer launcher
-rem  (C) 2026 JojoLapin Inc.
-rem ============================================================
-setlocal ENABLEEXTENSIONS ENABLEDELAYEDEXPANSION
-
+setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
-
-set "VENV=.venv"
-set "PY="
-
-rem Prefer Python 3.13, then 3.12, then 3.11, then whatever's first
-for %%V in (3.13 3.12 3.11) do (
-  if not defined PY (
-    py -%%V -c "import sys; sys.exit(0)" >nul 2>&1
-    if !ERRORLEVEL! == 0 set "PY=py -%%V"
-  )
-)
-if not defined PY (
-  python --version >nul 2>&1
-  if !ERRORLEVEL! == 0 set "PY=python"
-)
-if not defined PY (
-  echo.
-  echo   Python 3.11+ is required but was not found on PATH.
-  echo   Install it from https://www.python.org/downloads/ and retry.
-  echo.
-  pause
+if /i "%~1"=="--help" goto help
+if not "%~1"=="" if /i not "%~1"=="--console" (
+  echo Unknown argument. Use run.bat --help.
   exit /b 1
 )
-
-rem Create venv on first run
-if not exist "%VENV%\Scripts\python.exe" (
-  echo Creating virtual environment...
-  %PY% -m venv "%VENV%"
-  if errorlevel 1 (
-    echo   Failed to create virtual environment.
-    pause
-    exit /b 1
-  )
-)
-
-set "VPY=%VENV%\Scripts\python.exe"
-
-rem Bootstrap pip
-"%VPY%" -m pip --version >nul 2>&1
-if errorlevel 1 "%VPY%" -m ensurepip --upgrade
-
-rem Install / upgrade deps (quiet unless something changes)
-"%VPY%" -m pip install --upgrade --quiet pip wheel
-"%VPY%" -m pip install --quiet -r requirements.txt
-if errorlevel 1 (
-  echo   Failed to install runtime requirements.
-  pause
+if not exist ".venv-build\Scripts\pythonw.exe" (
+  echo Run setup.bat first, then double-click run.bat again.
+  if not defined TEXTSPEAK_NO_PAUSE pause
   exit /b 1
 )
-
-echo Launching TextSpeak Pro...
-"%VPY%" main.py
+if /i "%~1"=="--console" goto console
+start "TextSpeak Pro" ".venv-build\Scripts\pythonw.exe" "%~dp0main.py"
+exit /b %ERRORLEVEL%
+:console
+".venv-build\Scripts\python.exe" "%~dp0main.py"
 set "RC=%ERRORLEVEL%"
-
-if not "%RC%"=="0" (
-  echo.
-  echo   TextSpeak Pro exited with code %RC%.
-  pause
-)
+if not "%RC%"=="0" if not defined TEXTSPEAK_NO_PAUSE pause
 exit /b %RC%
+:help
+ echo Opens this checkout's application using the environment prepared by setup.bat.
+ echo No packages are installed or updated when launching.
+ echo run.bat --console keeps diagnostic output visible for troubleshooting.
+ echo If the app is already running, use its tray menu to Show it or Quit first.
+exit /b 0

@@ -9,14 +9,40 @@ restored around the improved native editor. See [interface correction](GUI_CORRE
 
 ## Running
 
-Use `run.bat`, or the existing environment:
+Double-click these scripts in the project folder:
+
+| Script | Purpose |
+| --- | --- |
+| `setup.bat` | Run once to prepare the tested Python environment and dependencies. |
+| `run.bat` | Open the current source application without downloading anything. |
+| `build.bat` | Create the executable, portable ZIP, installer and SHA-256 checksums. |
+
+Setup requires **Python 3.13 x64** with the Python launcher and internet access for
+the initial dependency downloads. It creates `.venv-build`, shared by the launcher
+and builder. Repeating setup preserves documents, preferences and voices.
+Building the installer also requires [Inno Setup 6](https://jrsoftware.org/isdl.php).
+The compiler is detected in standard install locations; for a custom location, set
+the `ISCC` environment variable to its full `ISCC.exe` path.
+
+The scripts work when launched from another folder. Use `--help` for instructions,
+`build.bat --check` to check build prerequisites, or `run.bat --console` for launch
+diagnostics. Set `TEXTSPEAK_NO_PAUSE=1` to suppress setup/build completion prompts
+when automating them. No build is required to use `run.bat`.
+
+If an existing copy is in the Windows tray, right-click its icon and choose **Show**
+to open it, or **Quit** before launching this checkout. Only one normal instance runs.
+
+The equivalent source launch is:
 
 ```powershell
-.\.venv\Scripts\python.exe main.py
+.\.venv-build\Scripts\python.exe main.py
 ```
 
-The separately built candidate is `dist/branded-candidate/TextSpeakPro.exe`.
-The pre-existing `dist/TextSpeakPro.exe` is preserved.
+New builds go to `dist/releases/1.2.0-rc.3/`. Open `TextSpeakPro.exe` there to run
+the built application, or use `TextSpeakPro-Setup-1.2.0-rc.3.exe` to install it.
+Extract the entire portable ZIP before running its executable.
+Earlier artifacts in `dist/branded-candidate/`, `dist/installer/` and the root of
+`dist/` are preserved; the scripts do not select those older executables.
 
 ## Document and playback behavior
 
@@ -103,16 +129,16 @@ Legacy web resources remain bundled for migration/rollback; the primary editor i
 
 ## Tests and builds
 
-The Windows installer is `dist/installer/TextSpeakPro-Setup-1.2.0-rc.3.exe`.
+The build script produces `dist/releases/1.2.0-rc.3/TextSpeakPro-Setup-1.2.0-rc.3.exe`.
 It defaults to installing for the current user, offers an optional desktop shortcut,
 and includes an uninstaller. Installed documents, preferences and voices stay in
 the existing user profile. Quit the tray copy before installing and launching.
 This release candidate is not code-signed.
 
-To rebuild the installer after building the branded executable:
+To rebuild all packages:
 
 ```powershell
-& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\TextSpeakPro.iss
+.\build.bat
 ```
 
 `tools/qa_installer.py` tests installation and removal in a temporary project folder;
@@ -121,7 +147,7 @@ it refuses to run over an existing registered TextSpeak Pro installation.
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 node --test tests/js/*.test.js
-.\.venv-build\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist/branded-candidate --workpath build/branded-candidate textspeak_pro.spec
+.\.venv-build\Scripts\python.exe build_exe.py --installer --check
 ```
 
 `requirements-windows-lock.txt` records the tested build environment. `requirements.txt`

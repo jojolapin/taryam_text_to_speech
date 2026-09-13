@@ -136,6 +136,23 @@ installed-executable checksum equality, registration removal and preservation of
 a user-created file. Evidence: `build/qa/installer-wo42o_11/result.json`.
 The installer is unsigned; no code-signing certificate was configured.
 
+The setup/build/run scripts were subsequently revised and verified on this machine.
+`setup.bat` successfully reused the pinned Python 3.13 environment, passed `pip check`
+and imported the native runtime. Help, invalid-option exit codes and invocation from
+another working directory were checked. `run.bat` uses that source environment
+without installing packages. Source playback passed all six smoke checks again
+(`build/qa/scripts-source/smoke-result.json`).
+
+The complete `build.bat` pipeline produced a fresh executable, portable ZIP and
+installer in `dist/releases/1.2.0-rc.3/`; the earlier candidates were preserved.
+The fresh executable passed all six playback checks with no errors
+(`build/qa/scripts-packaged/smoke-result.json`). The portable ZIP's complete entry
+list, CRC integrity and embedded executable SHA-256 were verified, as were all
+three artifact checksum sidecars. The fresh installer passed installation and
+uninstall checks, including exact executable integrity and user-file preservation
+(`build/qa/installer-mskqoeuc/result.json`). These new packages are the GitHub
+prerelease download candidates. The build log is `build/script-build.log`.
+
 ## 12. Remaining issues / explicit limits
 
 - Computer-use app access timed out. No manual Explorer-to-editor drag gesture,

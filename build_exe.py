@@ -1,134 +1,107 @@
-"""Build a single-file ``TextSpeakPro.exe`` with PyInstaller.
-
-Run this from the IDE (right-click -> Run) or the CLI. Produces:
-
-- ``dist/TextSpeakPro.exe``      (the one-file app)
-- ``dist/TextSpeakPro.sha256``   (checksum)
-- ``dist/TextSpeakPro-portable.zip`` (exe + empty voices/ + portable.flag)
-
-(C) 2026 JojoLapin Inc.
-"""
+"""Build the Windows executable, portable ZIP and optional Inno Setup installer."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.util
+import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+
+from app import APP_VERSION
 
 ROOT = Path(__file__).resolve().parent
-DIST = ROOT / "dist"
-BUILD = ROOT / "build"
-SPEC = ROOT / "textspeak_pro.spec"
-EXE_NAME = "TextSpeakPro.exe" if sys.platform.startswith("win") else "TextSpeakPro"
-EXE_PATH = DIST / EXE_NAME
+DIST = ROOT / "dist" / "releases" / APP_VERSION
+BUILD = ROOT / "build" / "releases" / APP_VERSION
+EXE_PATH = DIST / "TextSpeakPro.exe"
 
 
-def _preflight() -> None:
-    """Fail fast with a readable message when build-time deps are missing."""
-    missing = []
-    if importlib.util.find_spec("PyInstaller") is None:
-        missing.append("PyInstaller")
-    # Runtime deps must also be importable (they get traced by PyInstaller)
-    for mod, label in (
-        ("PySide6.QtCore", "PySide6"),
-        ("piper", "piper-tts"),
-        ("mutagen", "mutagen"),
-        ("lameenc", "lameenc"),
-        ("pypdf", "pypdf"),
-        ("requests", "requests"),
-    ):
-        if importlib.util.find_spec(mod) is None:
-            missing.append(label)
+def installer_compiler() -> Path:
+    candidates = [os.environ.get("ISCC"), shutil.which("ISCC.exe")]
+    for variable in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"):
+        base = os.environ.get(variable)
+        if base:
+            candidates.append(str(Path(base) / "Inno Setup 6" / "ISCC.exe"))
+            candidates.append(str(Path(base) / "Programs" / "Inno Setup 6" / "ISCC.exe"))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate).resolve()
+    raise SystemExit("Install Inno Setup 6 from https://jrsoftware.org/isdl.php, "
+                     "or set ISCC to the full path of ISCC.exe. Then rerun build.bat.")
+
+
+def preflight(with_installer: bool) -> Path | None:
+    if sys.platform != "win32":
+        raise SystemExit("Build Windows packages on Windows.")
+    missing = [name for name in ("PyInstaller", "PySide6", "piper", "mutagen", "lameenc", "pypdf", "requests")
+               if importlib.util.find_spec(name) is None]
     if missing:
-        print("[build] Missing required packages: " + ", ".join(sorted(set(missing))))
-        print("[build] Install them with:")
-        print(f"        {sys.executable} -m pip install -r requirements.txt -r requirements-build.txt")
-        raise SystemExit(1)
-    # Pillow is optional (only used for generating the icon)
-    if importlib.util.find_spec("PIL") is None:
-        print("[build] Pillow is not installed; icon generation will be skipped.")
+        raise SystemExit("Missing packages: " + ", ".join(missing) + ". Run setup.bat first.")
+    compiler = installer_compiler() if with_installer else None
+    print(f"[build] Python: {sys.version.split()[0]}", flush=True)
+    print(f"[build] Output: {DIST}", flush=True)
+    if compiler:
+        print(f"[build] Installer compiler: {compiler}", flush=True)
+    return compiler
 
 
-def _ensure_icon() -> None:
-    try:
-        import build_icon
-        build_icon.generate()
-    except SystemExit as e:
-        print(f"[build] Icon generation skipped: {e}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[build] Icon generation failed: {e!r}")
-
-
-def _run_pyinstaller() -> None:
-    if not SPEC.exists():
-        raise SystemExit(f"Missing spec file: {SPEC}")
-    print("[build] Running PyInstaller...")
-    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC)]
-    r = subprocess.run(cmd, cwd=str(ROOT))
-    if r.returncode != 0:
-        raise SystemExit(f"PyInstaller failed with code {r.returncode}")
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 16), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _package_portable_zip() -> Path | None:
-    if not EXE_PATH.exists():
-        return None
-    zip_path = DIST / "TextSpeakPro-portable.zip"
-    print(f"[build] Packaging portable zip -> {zip_path.name}")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        zf.write(EXE_PATH, arcname=EXE_NAME)
-        zf.writestr("portable.flag", "TextSpeak Pro portable mode\n")
-        zf.writestr("voices/.keep", "Download voices from the in-app catalog.\n")
-        zf.writestr("README.txt", (
-            "TextSpeak Pro - portable build\n"
-            "(C) 2026 JojoLapin Inc. All rights reserved.\n\n"
-            "Just double-click TextSpeakPro.exe.\n"
-            "All settings and downloaded voices stay in this folder.\n"
-        ))
-    return zip_path
+def checksum(path: Path) -> None:
+    with path.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    path.with_name(path.name + ".sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
 
 
 def main() -> int:
-    print(f"[build] Python: {sys.version.split()[0]} at {sys.executable}")
-    print(f"[build] Working in: {ROOT}")
-    _preflight()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--installer", action="store_true", help="Also create the Windows setup EXE")
+    parser.add_argument("--check", action="store_true", help="Check prerequisites without building")
+    args = parser.parse_args()
+    compiler = preflight(args.installer)
+    if args.check:
+        return 0
 
-    # PyInstaller cleans its own work area. Never delete the whole output folder:
-    # portable installations can contain voices, documents and settings there.
-    BUILD.mkdir(parents=True, exist_ok=True)
+    # These folders can contain portable user data. Never delete them wholesale.
     DIST.mkdir(parents=True, exist_ok=True)
+    BUILD.mkdir(parents=True, exist_ok=True)
+    if not (ROOT / "resources" / "icon.ico").exists():
+        import build_icon
+        build_icon.generate()
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                    "--distpath", str(DIST), "--workpath", str(BUILD),
+                    str(ROOT / "textspeak_pro.spec")], cwd=ROOT, check=True)
+    if not EXE_PATH.is_file():
+        raise SystemExit("PyInstaller did not produce the expected executable.")
+    checksum(EXE_PATH)
 
-    _ensure_icon()
-    _run_pyinstaller()
+    portable = DIST / f"TextSpeakPro-{APP_VERSION}-portable.zip"
+    temporary = portable.with_suffix(".zip.tmp")
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        archive.write(EXE_PATH, "TextSpeakPro.exe")
+        for name in ("LICENSE", "NOTICE"):
+            archive.write(ROOT / name, name)
+        archive.writestr("portable.flag", "TextSpeak Pro portable mode\n")
+        archive.writestr("voices/.keep", "Download voices from the in-app catalog.\n")
+        archive.writestr("README.txt", "TextSpeak Pro - portable build\n(C) 2026 JojoLapin Inc.\n\n"
+                         "Extract the entire ZIP into a writable folder, then open TextSpeakPro.exe.\n"
+                         "Keep portable.flag alongside the EXE. Documents and voices stay in this folder.\n"
+                         "If another copy is running, use its tray menu to Quit first.\n")
+    temporary.replace(portable)
+    checksum(portable)
 
-    if not EXE_PATH.exists():
-        print(f"[build] ERROR: expected {EXE_PATH} was not produced.")
-        return 1
-
-    digest = _sha256(EXE_PATH)
-    checksum_path = DIST / "TextSpeakPro.sha256"
-    checksum_path.write_text(f"{digest}  {EXE_NAME}\n", encoding="utf-8")
-    size_mb = EXE_PATH.stat().st_size / (1024 * 1024)
-
-    zip_path = _package_portable_zip()
-
-    print("\n[build] Done.")
-    print(f"        EXE:       {EXE_PATH} ({size_mb:.1f} MB)")
-    print(f"        SHA-256:   {digest}")
-    if zip_path and zip_path.exists():
-        print(f"        Portable:  {zip_path} ({zip_path.stat().st_size / (1024 * 1024):.1f} MB)")
+    if compiler:
+        subprocess.run([str(compiler), f"/DMyAppSource={EXE_PATH}", f"/O{DIST}",
+                        str(ROOT / "installer" / "TextSpeakPro.iss")], cwd=ROOT, check=True)
+        checksum(DIST / f"TextSpeakPro-Setup-{APP_VERSION}.exe")
+    print(f"[build] Finished. Packages and SHA-256 checksums: {DIST}", flush=True)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"[build] Failed: {error}", file=sys.stderr)
+        sys.exit(1)
