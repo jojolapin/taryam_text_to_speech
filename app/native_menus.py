@@ -1,7 +1,7 @@
 """Standard menus and playback toolbar for the native workspace."""
 from PySide6.QtWidgets import QToolBar, QMessageBox, QStyle
 from PySide6.QtCore import Qt
-from . import APP_NAME, APP_TRADEMARK, APP_AUTHOR, APP_YEAR
+from . import APP_NAME, APP_TRADEMARK, APP_AUTHOR, APP_YEAR, i18n
 
 def build_menus(window):
     file_menu = window.menuBar().addMenu("&File")
@@ -74,6 +74,9 @@ def build_menus(window):
     for minutes in (0, 10, 20, 30):
         window.action(timer, "Off" if not minutes else f"Stop after {minutes} minutes", lambda m=minutes: window.set_timer(m))
     window.action(speech, "Voices and Settings…", window.show_settings)
+    lang = i18n.resolve_lang(window.settings.get("language", "system"))
+    window.action(speech, i18n.t("kokoro.menu.download", lang), window.download_kokoro_voices)
+    window.action(speech, i18n.t("clone.menu.library", lang), window.show_voice_library)
     window.action(speech, "Pronunciation Dictionary…", window.show_pronunciation)
     view = window.menuBar().addMenu("&View")
     window.action(view, "Editor Font…", window.choose_font)
@@ -88,4 +91,4 @@ def build_menus(window):
     help_menu = window.menuBar().addMenu("&Help")
     window.action(help_menu, "Open Logs Folder", window.bridge.open_logs_folder)
     window.action(help_menu, "About Text Speak Pro", lambda: QMessageBox.about(window, APP_NAME,
-        f"{APP_TRADEMARK}\n© {APP_YEAR} {APP_AUTHOR}\nNative Windows text editing and speech.\n\nPiper reads locally; OpenAI sends the text you choose to its configured provider.\nAudio usage rights depend on the selected voice and provider.\n\nHighlighting marks the current synthesized passage, not estimated words."))
+        f"{APP_TRADEMARK}\n© {APP_YEAR} {APP_AUTHOR}\nNative Windows text editing and speech.\n\nPiper reads locally; OpenAI sends the text you choose to its configured provider.\nAudio usage rights depend on the selected voice and provider.\n\n{i18n.t('about.kokoro', i18n.resolve_lang(window.settings.get('language', 'system')))}\n\n{i18n.t('about.pocket', i18n.resolve_lang(window.settings.get('language', 'system')))}\n\nHighlighting marks the current synthesized passage, not estimated words."))

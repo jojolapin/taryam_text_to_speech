@@ -2,6 +2,8 @@
 .venv/
 .venv-build/
 venv/
+clone_runtime/.venv/
+clone_runtime/run/
 
 # Python
 __pycache__/

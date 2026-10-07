@@ -69,7 +69,7 @@ class ExportPanel(QWidget):
 
     def refresh_options(self):
         # OpenAI chooses its encoded MP3 bitrate; do not promise a local setting applies.
-        offline = self.window.provider.currentData() == "piper"
+        offline = self.window.provider.currentData() != "openai"
         mp3 = self.format.currentData() == "mp3"
         self.bitrate.setEnabled(offline and mp3 and not self.busy)
         self.bitrate.setToolTip("Choose the offline MP3 encoding bitrate." if offline and mp3

@@ -50,6 +50,11 @@ VERSION_FILE = ROOT / 'resources' / 'version_info.txt'
 # ---------------------------------------------------------------------------
 piper_datas, piper_binaries, piper_hidden = collect_all('piper')
 onnx_datas, onnx_binaries, onnx_hidden = collect_all('onnxruntime')
+# Kokoro phonemizes through espeak-ng shipped by espeakng_loader. Those data
+# files and the native library have to sit beside the package in the frozen app.
+kokoro_datas, kokoro_binaries, kokoro_hidden = collect_all('kokoro_onnx')
+espeak_datas, espeak_binaries, espeak_hidden = collect_all('espeakng_loader')
+phoneme_datas, phoneme_binaries, phoneme_hidden = collect_all('phonemizer')
 
 # collect_all() uses collect_dynamic_libs() internally, which on Windows only
 # picks up '.dll' files - but piper's native extension is espeakbridge.pyd.
@@ -87,8 +92,8 @@ datas = [
 if ICON_ICO.exists():
     datas.append((str(ICON_ICO), 'resources'))
 
-datas += piper_datas + onnx_datas
-binaries = piper_binaries + onnx_binaries
+datas += piper_datas + onnx_datas + kokoro_datas + espeak_datas + phoneme_datas
+binaries = piper_binaries + onnx_binaries + kokoro_binaries + espeak_binaries + phoneme_binaries
 
 hiddenimports = [
     'PySide6.QtCore',
@@ -104,7 +109,7 @@ hiddenimports = [
     'lameenc',
     'requests',
     'pypdf',
-] + piper_hidden + onnx_hidden
+] + piper_hidden + onnx_hidden + kokoro_hidden + espeak_hidden + phoneme_hidden
 
 block_cipher = None
 
@@ -117,7 +122,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / 'app' / 'frozen_diagnostics.py')],
-    excludes=['tkinter', 'PyQt5', 'PyQt6', 'matplotlib', 'numpy.testing'],
+    excludes=['tkinter', 'PyQt5', 'PyQt6', 'matplotlib', 'numpy.testing',
+              'torch', 'torchaudio', 'torchvision', 'pocket_tts'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

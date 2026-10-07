@@ -12,6 +12,7 @@ if not exist ".venv-build\Scripts\pythonw.exe" (
   exit /b 1
 )
 if /i "%~1"=="--console" goto console
+echo Opening TextSpeak Pro...
 start "TextSpeak Pro" ".venv-build\Scripts\pythonw.exe" "%~dp0main.py"
 exit /b %ERRORLEVEL%
 :console

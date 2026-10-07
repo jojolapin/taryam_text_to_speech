@@ -4,17 +4,18 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QThreadPool, QSignalBlocker
+from PySide6.QtCore import Qt, QTimer, QThreadPool, QSignalBlocker, QEventLoop, QObject, Signal
 from PySide6.QtGui import QAction, QKeySequence, QFont, QTextCursor, QColor, QPalette, QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
     QLineEdit, QPushButton, QLabel, QComboBox, QDoubleSpinBox, QSpinBox,
     QFileDialog, QMessageBox, QInputDialog, QFontDialog, QTextEdit, QToolBar,
-    QAbstractItemView, QMenu, QSystemTrayIcon)
+    QAbstractItemView, QMenu, QSystemTrayIcon, QProgressDialog)
 
-from . import APP_NAME, APP_AUTHOR, APP_YEAR, paths
+from . import APP_NAME, APP_AUTHOR, APP_YEAR, i18n, paths
 from .documents import new_document, validate_snapshot, SessionStore
 from .editor import TextEditor, FindDialog
 from .playback import PlaybackManager
@@ -124,13 +125,16 @@ class MainWindow(QMainWindow):
         self.filter.textChanged.connect(self.filter_documents)
         left_layout.addWidget(self.filter)
         self.library = QListWidget()
+        self.library.setObjectName("bookmarkList")
         self.library.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.library.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.library.setAccessibleName("Bookmarks")
+        self.library.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.library.customContextMenuRequested.connect(self.show_bookmark_menu)
         self.library.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.library.currentItemChanged.connect(self.select_document)
         self.library.itemDoubleClicked.connect(lambda _: self.rename_document())
-        self.library.model().rowsMoved.connect(lambda *args: self.schedule_save())
+        self.library.model().rowsMoved.connect(self._bookmarks_reordered)
         left_layout.addWidget(self.library)
         add = QPushButton("+ Add Bookmark")
         add.setObjectName("primaryButton")
@@ -151,10 +155,10 @@ class MainWindow(QMainWindow):
         self.document_heading.setObjectName("documentTitle")
         editor_layout.addWidget(self.document_heading)
         controls = QHBoxLayout()
+        self.engine_label = QLabel()
         self.provider = QComboBox()
-        self.provider.addItem("Piper · Offline", "piper")
-        self.provider.addItem("OpenAI · Online", "openai")
-        self.provider.setAccessibleName("Speech provider")
+        self.fill_providers()
+        self.provider.setAccessibleName("Speech engine")
         self.voice = QComboBox()
         self.voice.setMinimumContentsLength(14)
         self.voice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -168,6 +172,7 @@ class MainWindow(QMainWindow):
         self.volume.setRange(0, 100)
         self.volume.setSuffix(" %")
         self.volume.setAccessibleName("Volume")
+        controls.addWidget(self.engine_label)
         controls.addWidget(self.provider)
         controls.addWidget(self.voice, 1)
         controls.addWidget(QLabel("Speed"))
@@ -193,7 +198,8 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.export_panel)
         self.provider.currentIndexChanged.connect(self.export_panel.refresh_options)
         splitter.addWidget(right)
-        splitter.setSizes([250, 910])
+        left.setMinimumWidth(280)
+        splitter.setSizes([320, 840])
         splitter.setStretchFactor(1, 1)
         self.find_dialog = FindDialog(self.editor, self)
         self.statusBar().showMessage("Opening your bookmark library…")
@@ -295,6 +301,41 @@ class MainWindow(QMainWindow):
     def rename_document(self):
         return self.document_controller.rename_document()
 
+    def delete_bookmark(self, doc_id):
+        self.select_id(doc_id)
+        self.close_document()
+
+    def bookmark_menu(self, item):
+        menu = QMenu(self.library)
+        lang = self._lang()
+        if item is None:
+            menu.addAction(i18n.t("bookmark.menu.add", lang), lambda: self.add_document())
+            return menu
+        self.library.setCurrentItem(item)
+        row = self.library.row(item)
+        menu.addAction(i18n.t("bookmark.menu.rename", lang) + "\tF2", self.rename_document)
+        menu.addAction(i18n.t("bookmark.menu.duplicate", lang), self.duplicate_document)
+        menu.addAction(i18n.t("bookmark.menu.delete", lang) + "\tCtrl+W", self.close_document)
+        menu.addSeparator()
+        move_up = menu.addAction(i18n.t("bookmark.menu.move_up", lang), lambda: self.move_document(-1))
+        move_down = menu.addAction(i18n.t("bookmark.menu.move_down", lang), lambda: self.move_document(1))
+        move_up.setEnabled(row > 0)
+        move_down.setEnabled(row < self.library.count() - 1)
+        return menu
+
+    def _bookmarks_reordered(self, *args):
+        self.document_controller.repair_bookmark_rows()
+        self.schedule_save()
+
+    def show_bookmark_menu(self, pos):
+        item = self.library.itemAt(pos)
+        self.bookmark_menu(item).exec(self.library.viewport().mapToGlobal(pos))
+
+    def show_bookmark_menu_for(self, doc_id, source, pos):
+        self.select_id(doc_id)
+        viewport_pos = self.library.viewport().mapFromGlobal(source.mapToGlobal(pos))
+        self.show_bookmark_menu(viewport_pos)
+
     def duplicate_document(self):
         return self.document_controller.duplicate_document()
 
@@ -346,23 +387,90 @@ class MainWindow(QMainWindow):
     def populate_recent(self):
         return self.document_controller.populate_recent()
 
-    def reload_voices(self):
-        current = self.voice.currentData()
+    def _lang(self) -> str:
+        return i18n.resolve_lang(self.settings.get("language", "system"))
+
+    def fill_providers(self):
+        current = self.provider.currentData() if self.provider.count() else "piper"
+        lang = self._lang()
+        self.engine_label.setText(i18n.t("engine.label", lang))
+        with QSignalBlocker(self.provider):
+            self.provider.clear()
+            self.provider.addItem(i18n.t("engine.auto", lang), "auto")
+            self.provider.addItem(i18n.t("engine.kokoro", lang), "kokoro")
+            self.provider.addItem(i18n.t("engine.piper", lang), "piper")
+            self.provider.addItem(i18n.t("engine.clone", lang), "clone")
+            self.provider.addItem(i18n.t("engine.openai", lang), "openai")
+            index = self.provider.findData(current or "piper")
+            self.provider.setCurrentIndex(max(0, index))
+        self.provider.setToolTip(self._engine_tooltip())
+
+    def _engine_tooltip(self) -> str:
+        from .speech_engines.hardware import probe_hardware
+        from .speech_engines.kokoro_engine import models_ready
+
+        lang = self._lang()
+        hardware = probe_hardware()
+        if hardware["cuda"]:
+            device = i18n.t("engine.tooltip.gpu", lang, name=hardware["gpu_name"] or "NVIDIA")
+        else:
+            device = i18n.t("engine.tooltip.cpu", lang)
+        ready = i18n.t("engine.tooltip.kokoro_ready" if models_ready() else "engine.tooltip.kokoro_missing", lang)
+        return i18n.t("engine.tooltip", lang, device=device, kokoro=ready)
+
+    def _voice_list_engine(self) -> str:
+        from .speech_engines.kokoro_engine import models_ready
+        from .speech_engines.router import resolve_provider
+
+        provider = self.provider.currentData()
+        if provider == "openai":
+            return "openai"
+        if provider == "kokoro":
+            return "kokoro"
+        if provider == "clone":
+            return "clone"
+        return resolve_provider(provider, kokoro_ready=models_ready())
+
+    def reload_voices(self, prefer=None):
+        current = self.voice.currentData() if prefer is None else prefer
         with QSignalBlocker(self.voice):
             self.voice.clear()
-            if self.provider.currentData() == "openai":
+            engine = self._voice_list_engine()
+            if engine == "openai":
                 from .openai_provider import OPENAI_VOICES
                 for voice in OPENAI_VOICES:
                     self.voice.addItem(voice.title(), voice)
+            elif engine == "kokoro":
+                from .speech_engines.kokoro_catalog import choice_label, voices
+                for row in voices():
+                    self.voice.addItem(choice_label(row, self._lang()), row["storage_id"])
+            elif engine == "clone":
+                from .speech_engines.clone_profiles import voice_choices
+                from .speech_engines.router import is_clone_voice
+                seen = set()
+                for row in voice_choices(self._lang()):
+                    self.voice.addItem(row["label"], row["storage_id"])
+                    seen.add(row["storage_id"])
+                if current and is_clone_voice(str(current)) and current not in seen:
+                    self.voice.addItem(i18n.t("clone.voice.missing", self._lang()), current)
             else:
                 for voice in self.bridge.engine.discover_voices():
                     self.voice.addItem(voice["name"], voice["id"])
             index = self.voice.findData(current)
             if index >= 0:
                 self.voice.setCurrentIndex(index)
+        self.provider.setToolTip(self._engine_tooltip())
 
     def provider_changed(self):
-        self.reload_voices()
+        provider = self.provider.currentData()
+        saved = {
+            "piper": self.settings.get("last_voice", ""),
+            "kokoro": self.settings.get("last_kokoro_voice", ""),
+            "auto": self.settings.get("last_auto_voice", ""),
+            "clone": self.settings.get("last_clone_voice", ""),
+        }.get(provider, "")
+        self.rate.setToolTip(i18n.t("clone.speed.unsupported", self._lang()) if provider == "clone" else "")
+        self.reload_voices(prefer=saved or None)
         self.controls_changed()
 
     def controls_changed(self):
@@ -375,6 +483,12 @@ class MainWindow(QMainWindow):
         self.settings.set("last_volume", doc["volume"])
         if doc["provider"] == "piper":
             self.settings.set("last_voice", doc["voice"])
+        elif doc["provider"] == "kokoro":
+            self.settings.set("last_kokoro_voice", doc["voice"])
+        elif doc["provider"] == "auto":
+            self.settings.set("last_auto_voice", doc["voice"])
+        elif doc["provider"] == "clone":
+            self.settings.set("last_clone_voice", doc["voice"])
         # Changes apply to the next explicit Play, never restart another bookmark.
         self.schedule_save()
 
@@ -388,10 +502,113 @@ class MainWindow(QMainWindow):
             doc["speakingInstructions"] = instruction_for(doc.get("speakingStyle", "neutral"))
         return doc
 
+    def ensure_kokoro_ready(self, voice_id: str) -> bool:
+        """Download the cached Kokoro model when this voice needs it."""
+        from .speech_engines.router import is_kokoro_voice
+
+        if not is_kokoro_voice(voice_id):
+            return True
+        from .speech_engines.kokoro_engine import models_ready, package_status
+
+        lang = self._lang()
+        installed, _detail = package_status()
+        if not installed:
+            self.show_error(i18n.t("kokoro.error.kokoro-missing-package", lang))
+            return False
+        if models_ready():
+            return True
+        answer = QMessageBox.question(
+            self,
+            i18n.t("kokoro.download.title", lang),
+            i18n.t("kokoro.download.body", lang),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        return self.download_kokoro_voices()
+
+    def download_kokoro_voices(self) -> bool:
+        """Download Kokoro weights on a worker thread, with a progress dialog."""
+        from .speech_engines.kokoro_engine import KokoroError, download_models, models_ready, package_status
+
+        lang = self._lang()
+        installed, _detail = package_status()
+        if not installed:
+            self.show_error(i18n.t("kokoro.error.kokoro-missing-package", lang))
+            return False
+        if models_ready():
+            self.statusBar().showMessage(i18n.t("kokoro.download.already", lang))
+            return True
+
+        class _Relay(QObject):
+            tick = Signal(int, int)
+            finished = Signal(bool, str)
+
+        relay = _Relay(self)
+        progress = QProgressDialog(
+            i18n.t("kokoro.download.progress", lang),
+            i18n.t("kokoro.download.cancel", lang),
+            0, 1000, self,
+        )
+        progress.setWindowTitle(i18n.t("kokoro.download.title", lang))
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        cancel = threading.Event()
+        outcome = {"ok": False, "error": ""}
+
+        def on_tick(done: int, total: int) -> None:
+            progress.setMaximum(max(total, 1))
+            progress.setValue(min(done, total or 1))
+
+        def work() -> None:
+            try:
+                download_models(progress=lambda done, total: relay.tick.emit(done, total), cancel=cancel)
+                relay.finished.emit(True, "")
+            except KeyboardInterrupt:
+                relay.finished.emit(False, "cancelled")
+            except KokoroError as exc:
+                relay.finished.emit(False, self.bridge._kokoro_message(exc))
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Kokoro download failed")
+                relay.finished.emit(False, str(exc))
+
+        loop = QEventLoop(self)
+
+        def finish(ok: bool, message: str) -> None:
+            outcome["ok"] = ok
+            outcome["error"] = message
+            progress.reset()
+            loop.quit()
+
+        relay.tick.connect(on_tick)
+        relay.finished.connect(finish)
+        progress.canceled.connect(cancel.set)
+        threading.Thread(target=work, name="kokoro-download", daemon=True).start()
+        loop.exec()
+        if outcome["ok"]:
+            self.reload_voices()
+            self.statusBar().showMessage(i18n.t("kokoro.download.done", lang))
+            return True
+        if outcome["error"] and outcome["error"] != "cancelled":
+            self.show_error(outcome["error"])
+        return False
+
+    def ensure_clone_ready(self, voice_id: str) -> bool:
+        from .native_clone import ensure_clone_ready
+        return ensure_clone_ready(self, voice_id)
+
+    def show_voice_library(self):
+        from .native_clone import VoiceLibraryDialog
+        VoiceLibraryDialog(self).exec()
+
     def play(self, mode="normal"):
         if not self.document():
             return
         doc = self.playback_document()
+        if not self.ensure_kokoro_ready(doc.get("voice", "")):
+            return
+        if not self.ensure_clone_ready(doc.get("voice", "")):
+            return
         if doc.get("provider") == "openai" and not self.settings.get("ai_disclosure_ack", False):
             answer = QMessageBox.question(self, "Online AI Voice", "OpenAI voices send the selected text to your configured OpenAI provider and may incur API charges. Continue?")
             if answer != QMessageBox.StandardButton.Yes:
@@ -566,7 +783,7 @@ class MainWindow(QMainWindow):
             return
         doc = self.playback_document()
         if batch and doc.get("provider") == "openai":
-            self.show_error("Paragraph batch export is available with offline Piper voices. Use Export Speech to Audio for OpenAI.")
+            self.show_error(i18n.t("export.batch_offline_only", self._lang()))
             return
         if not doc["voice"] or not doc["text"].strip():
             self.show_error("Choose a voice and enter text before exporting.")
@@ -575,6 +792,10 @@ class MainWindow(QMainWindow):
         bitrate = self.export_panel.bitrate.currentData()
         author = self.export_panel.author.text()
         self.settings.set("id3_author", author)
+        if not self.ensure_kokoro_ready(doc.get("voice", "")):
+            return
+        if not self.ensure_clone_ready(doc.get("voice", "")):
+            return
         if doc.get("provider") == "openai" and not self.settings.get("ai_disclosure_ack", False):
             if QMessageBox.question(self, "Online Audio Export", "Send this bookmark's text to your configured OpenAI provider to generate audio? API charges may apply.") != QMessageBox.StandardButton.Yes:
                 return
@@ -618,12 +839,23 @@ class MainWindow(QMainWindow):
         if request == self.export_request:
             self.export_request = None
             self.export_panel.set_busy(False)
-            self.export_panel.feedback.setText("Export cancelled." if message == "cancelled" else "Export failed: " + message)
+            from .openai_provider import openai_error_summary
+            summary = openai_error_summary(message)
+            self.export_panel.feedback.setText("Export cancelled." if message == "cancelled" else "Export failed: " + summary)
             if message != "cancelled":
                 self.show_error(message)
 
     def show_error(self, message):
-        log.error("Application operation failed: %s", message)
+        from .openai_provider import decode_openai_limit, is_openai_limit_message, openai_error_summary
+        summary = openai_error_summary(message)
+        log.error("Application operation failed: %s", summary)
+        report = decode_openai_limit(message)
+        if report:
+            from .openai_limit_dialog import OpenAILimitDialog
+            OpenAILimitDialog(self, report).exec()
+            return
+        if is_openai_limit_message(message):
+            message = summary
         QMessageBox.warning(self, APP_NAME, message)
 
     def closeEvent(self, event):
@@ -639,6 +871,8 @@ class MainWindow(QMainWindow):
                 return
         self.playback.stop()
         self.cancel_audio_export()
+        from .speech_engines.clone_client import shutdown_if_running
+        shutdown_if_running()
         for request in list(self.bridge._cancels):
             self.bridge.cancel(request)
         self.settings.save_window_geometry(bytes(self.saveGeometry()), bytes(self.saveState()))

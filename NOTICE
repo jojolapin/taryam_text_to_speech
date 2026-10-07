@@ -60,4 +60,101 @@ Their copyrights and license terms are retained by their respective owners.
    Used only when locally installed; not redistributed with TextSpeak Pro.
 
 ---------------------------------------------------------------------------
+8. Kokoro-82M and kokoro-onnx
+---------------------------------------------------------------------------
+   Model: https://huggingface.co/hexgrad/Kokoro-82M
+   Model license: Apache License 2.0
+   Copyright (C) hexgrad and Kokoro contributors.
+   Commercial use and redistribution of the published weights are permitted
+   under Apache-2.0. Preserve the Apache notice when redistributing the
+   weights. The ONNX graph and voice bank are downloaded by the user and
+   cached under the application data directory. They are not bundled in
+   the source repository or the installer.
+
+   The Kokoro-82M model card states that training audio includes material
+   under Creative Commons Attribution terms, including the SIWIS French
+   corpus (CC BY 4.0, less than 11 hours) and Koniwa (CC BY 3.0, less than
+   1 hour). Those dataset terms are separate from the Apache-2.0 weight
+   license. Attribution of those sources is recorded here:
+   https://huggingface.co/hexgrad/Kokoro-82M
+
+   Runtime: kokoro-onnx 0.6.1
+   https://github.com/thewh1teagle/kokoro-onnx
+   Code license: MIT
+   Copyright (C) 2025 thewh1teagle and kokoro-onnx contributors.
+   Redistribution and commercial use of the runtime code are permitted
+   under the MIT license.
+
+   ONNX Runtime 1.25.0 (onnxruntime)
+   License: MIT
+   Copyright (C) Microsoft Corporation.
+
+   phonemizer 3.4.0
+   https://github.com/bootphon/phonemizer
+   License: GNU General Public License v3.0 or later (GPL-3.0-or-later)
+   Copyright (C) Mathieu Bernard.
+   The installed package metadata classifies it as
+   "GNU General Public License v3 or later".
+   Used by kokoro-onnx to turn text into phonemes.
+
+   espeakng-loader 0.2.4
+   https://github.com/thewh1teagle/espeakng-loader
+   Loader code license: MIT
+   Copyright (C) thewh1teagle.
+   The loader redistributes the espeak-ng library and its language data.
+   espeak-ng itself is GNU General Public License v3.0 (GPL-3.0):
+   https://github.com/espeak-ng/espeak-ng
+
+   Kokoro speech therefore links GPL-3.0 components (phonemizer and
+   espeak-ng) in addition to the Piper engine already covered in section 1.
+   A copy of the GNU GPL-3.0 is available at:
+   https://www.gnu.org/licenses/gpl-3.0.en.html
+
+---------------------------------------------------------------------------
+9. Pocket TTS  (optional, separate runtime — not inside the main executable)
+---------------------------------------------------------------------------
+   Installed package: pocket-tts 2.1.0
+   https://github.com/kyutai-labs/pocket-tts
+   Code license: MIT
+   The wheel ships the MIT grant in
+   pocket_tts-2.1.0.dist-info/licenses/LICENSE
+   (License-File: LICENSE; the package metadata has no SPDX License field).
+   PyTorch installed beside it: torch 2.14.1+cpu (CPU-only Windows wheel;
+   CUDA is not installed and is not used). PyTorch's own license applies
+   to that library. Neither PyTorch nor Pocket TTS is imported by the
+   TextSpeak Pro executable.
+
+   Voice-cloning weights (downloaded only after the user agrees):
+   https://huggingface.co/kyutai/pocket-tts
+   Repository license field, verified against the Hub API for the
+   installed revision pin 39592ff23c9ef80098bb74895d104c26275fe2c9:
+   Creative Commons Attribution 4.0 (CC-BY-4.0).
+   Commercial use and redistribution are allowed when the CC-BY-4.0
+   attribution and license notice are preserved. The repository is
+   gated ("auto"): a Hugging Face account must accept the access terms,
+   which include sharing contact information, before the files can be
+   downloaded. Anonymous download returns HTTP 403.
+   The model card prohibits cloning or impersonation without explicit
+   lawful consent. TextSpeak Pro requires that acknowledgement before
+   a profile is created and does not ship celebrity or public-figure
+   presets.
+
+   Languages loaded by this product from pocket-tts 2.1.0:
+   english, and french_24l. The installed package rejects language
+   "french" and requires the larger 24-layer French checkpoint.
+   Voice states are cached separately per checkpoint.
+
+   The public preset catalog at
+   https://huggingface.co/kyutai/tts-voices
+   is not bundled and is not used. Those preset voices have their own
+   licenses.
+
+   Runtime dependencies used only inside clone_runtime: huggingface_hub,
+   miniaudio (MP3 decode), and their transitive libraries. They are
+   installed by clone_runtime/setup.bat into clone_runtime/.venv and
+   can be removed by deleting that folder. Cached weights live under
+   the application data directory in models/pocket and are separate
+   from Kokoro.
+
+---------------------------------------------------------------------------
 End of NOTICE.

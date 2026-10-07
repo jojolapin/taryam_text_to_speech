@@ -59,6 +59,15 @@ def apply_theme(window, theme):
         QListWidget::item {{ padding: 13px 9px; margin-bottom: 5px; border-radius: 9px; }}
         QListWidget::item:selected {{ background: {selected}; color: {text}; }}
         QListWidget::item:hover {{ background: {selected}; }}
+        QListWidget#bookmarkList::item {{ padding: 2px 0px; margin-bottom: 4px; }}
+        QWidget#bookmarkRow {{ background: transparent; }}
+        QLabel#bookmarkTitle {{ background: transparent; color: {text}; font-size: 13px; font-weight: 600; padding: 0; }}
+        QLabel#bookmarkStatus {{ background: transparent; color: {('#fcd34d' if dark else '#865600')};
+            font-size: 11px; font-weight: 700; padding: 0; }}
+        QToolButton#bookmarkClose {{ background: transparent; border: none; border-radius: 8px;
+            padding: 0 7px; min-width: 22px; max-width: 28px; font-size: 16px; font-weight: 700; color: {muted}; }}
+        QToolButton#bookmarkClose:hover {{ background: {('#3a2430' if dark else '#fde8ec')};
+            color: {('#fda4af' if dark else '#b32442')}; }}
         QToolBar {{ border: none; background: transparent; spacing: 7px; padding: 4px 0; }}
         QToolButton, QPushButton {{ background: {card}; border: 1px solid {border};
             border-radius: 9px; padding: 9px 13px; font-weight: 600; }}

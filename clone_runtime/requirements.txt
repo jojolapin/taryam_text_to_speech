@@ -1,0 +1,7 @@
+# Isolated Pocket TTS runtime for TextSpeak Pro.
+# Do not install this file into .venv or .venv-build.
+# On Windows, the default PyTorch wheel is already CPU-only.
+pocket-tts==2.1.0
+# MP3 import. Pocket's own reader needs this optional extra for anything
+# other than WAV, and the soundfile wheel does not decode MP3 on Windows.
+miniaudio==1.61

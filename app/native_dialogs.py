@@ -40,7 +40,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(catalog_page, "Offline Voices")
         search.textChanged.connect(self.filter_catalog)
         self.bridge.catalogProgress.connect(self.progress)
-        self.bridge.catalogDone.connect(self.done)
+        self.bridge.catalogDone.connect(self.download_finished)
         self.bridge.catalogError.connect(self.failed)
         for voice in json.loads(self.bridge.catalog_list())["voices"]:
             self.catalog.addItem(voice["id"] + (" · installed" if voice.get("installed") else ""))
@@ -109,7 +109,7 @@ class SettingsDialog(QDialog):
         if request == self.request:
             self.feedback.setText(f"Downloading: {done/1048576:.1f} / {total/1048576:.1f} MB")
 
-    def done(self, request, voice):
+    def download_finished(self, request, voice):
         if request == self.request:
             self.request = None
             self.download.setEnabled(True)

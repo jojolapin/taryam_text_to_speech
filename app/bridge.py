@@ -37,6 +37,7 @@ from .openai_provider import (
     OPENAI_VOICES,
     OpenAIError,
     OpenAIProvider,
+    format_openai_error,
     resolve_config,
 )
 from .providers import PiperProvider, ProviderRegistry
@@ -411,7 +412,7 @@ class Bridge(QObject):
             except OpenAIError as e:
                 if str(e) == "cancelled":
                     return
-                self.smartToolError.emit(request_id, str(e))
+                self.smartToolError.emit(request_id, format_openai_error(e))
             except Exception as e:  # noqa: BLE001
                 log.exception("Smart tool failed")
                 self.smartToolError.emit(request_id, str(e))
@@ -419,6 +420,59 @@ class Bridge(QObject):
                 self._cancels.pop(request_id, None)
 
         self.pool.start(_Runnable(_worker))
+
+    def _kokoro_message(self, exc) -> str:
+        from . import i18n
+
+        lang = i18n.resolve_lang(self.settings.get("language", "system"))
+        return i18n.t(f"kokoro.error.{exc.code}", lang, detail=exc.detail)
+
+    def _engine_message(self, exc) -> str | None:
+        from .speech_engines.clone_errors import CloneError
+        from .speech_engines.kokoro_engine import KokoroError
+
+        if isinstance(exc, KokoroError):
+            return self._kokoro_message(exc)
+        if isinstance(exc, CloneError):
+            from . import i18n
+
+            lang = i18n.resolve_lang(self.settings.get("language", "system"))
+            return i18n.t(f"clone.error.{exc.code}", lang, detail=exc.detail)
+        return None
+
+    def _synthesize_local_wav(self, text: str, voice_id: str, length_scale: float,
+                              volume: float, token) -> bytes:
+        from .speech_engines.router import is_clone_voice, is_kokoro_voice
+
+        if is_clone_voice(voice_id):
+            from .speech_engines.clone_engine import CloneEngine
+
+            return CloneEngine().synthesize_wav_bytes(text, voice_id, length_scale, volume, token)
+        if is_kokoro_voice(voice_id):
+            from .speech_engines.kokoro_engine import KokoroEngine
+
+            return KokoroEngine().synthesize_wav_bytes(text, voice_id, length_scale, volume, token)
+        return self.engine.synthesize_wav_bytes(text, voice_id, length_scale, volume, token)
+
+    def _export_local_audio(self, text: str, voice_id: str, fmt: str, length_scale: float,
+                            volume: float, bitrate: int, token, progress=None):
+        from .speech_engines.router import is_clone_voice, is_kokoro_voice
+
+        if is_clone_voice(voice_id):
+            from .speech_engines.clone_engine import CloneEngine
+
+            return CloneEngine().export_audio(
+                text, voice_id, fmt, length_scale, volume, bitrate, token=token, progress=progress,
+            )
+        if is_kokoro_voice(voice_id):
+            from .speech_engines.kokoro_engine import KokoroEngine
+
+            return KokoroEngine().export_audio(
+                text, voice_id, fmt, length_scale, volume, bitrate, token=token, progress=progress,
+            )
+        return self.engine.export_audio(
+            text, voice_id, fmt, length_scale, volume, bitrate, token=token, progress=progress,
+        )
 
     # ============================================================
     # Synthesis (single chunk for playback)
@@ -432,7 +486,7 @@ class Bridge(QObject):
 
         def _worker():
             try:
-                wav = self.engine.synthesize_wav_bytes(speech_text, voice_id, length_scale, volume, token)
+                wav = self._synthesize_local_wav(speech_text, voice_id, length_scale, volume, token)
                 if token.cancelled:
                     return
                 self.synthesizeReady.emit(request_id, base64.b64encode(wav).decode("ascii"))
@@ -441,6 +495,10 @@ class Bridge(QObject):
             except FileNotFoundError as e:
                 self.synthesizeError.emit(request_id, f"voice-missing: {e}")
             except Exception as e:  # noqa: BLE001
+                message = self._engine_message(e)
+                if message:
+                    self.synthesizeError.emit(request_id, message)
+                    return
                 log.exception("Synthesis failed")
                 self.synthesizeError.emit(request_id, str(e))
             finally:
@@ -488,7 +546,7 @@ class Bridge(QObject):
             except OpenAIError as e:
                 if str(e) == "cancelled":
                     return
-                self.openaiAudioError.emit(request_id, str(e))
+                self.openaiAudioError.emit(request_id, format_openai_error(e))
             except Exception:  # noqa: BLE001 - sanitized; never leak details
                 log.exception("OpenAI synthesis failed")
                 self.openaiAudioError.emit(request_id, "OpenAI synthesis failed.")
@@ -545,7 +603,7 @@ class Bridge(QObject):
                 def progress(stage: str, ratio: float):
                     self.exportProgress.emit(request_id, stage, ratio)
 
-                data, audio_seconds, _sr, _ch = self.engine.export_audio(
+                data, audio_seconds, _sr, _ch = self._export_local_audio(
                     text, voice_id, fmt, length_scale, volume, bitrate,
                     token=token, progress=progress,
                 )
@@ -571,6 +629,10 @@ class Bridge(QObject):
             except PiperMissingError:
                 self.exportError.emit(request_id, "piper-missing")
             except Exception as e:  # noqa: BLE001
+                message = self._engine_message(e)
+                if message:
+                    self.exportError.emit(request_id, message)
+                    return
                 log.exception("Export failed")
                 self.exportError.emit(request_id, str(e))
             finally:
@@ -674,7 +736,7 @@ class Bridge(QObject):
                 if str(e) == "cancelled":
                     self.exportError.emit(request_id, "cancelled")
                 else:
-                    self.exportError.emit(request_id, str(e))
+                    self.exportError.emit(request_id, format_openai_error(e))
             except Exception as e:  # noqa: BLE001
                 log.exception("OpenAI export failed")
                 self.exportError.emit(request_id, str(e))
@@ -759,7 +821,7 @@ class Bridge(QObject):
                         self.exportError.emit(request_id, "cancelled")
                         return
                     self.exportProgress.emit(request_id, "synth", (i - 1) / total)
-                    data, audio_seconds, _sr, _ch = self.engine.export_audio(
+                    data, audio_seconds, _sr, _ch = self._export_local_audio(
                         text, voice_id, ext, length_scale, volume, bitrate, token=token,
                     )
                     name = _safe_filename(f"{prefix}-{i:03d}", ext)
@@ -778,6 +840,10 @@ class Bridge(QObject):
             except KeyboardInterrupt:
                 self.exportError.emit(request_id, "cancelled")
             except Exception as e:  # noqa: BLE001
+                message = self._engine_message(e)
+                if message:
+                    self.exportError.emit(request_id, message)
+                    return
                 log.exception("Batch export failed")
                 self.exportError.emit(request_id, str(e))
             finally:

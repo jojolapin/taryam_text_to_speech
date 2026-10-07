@@ -5,13 +5,116 @@ not touched by navigation or editing. Deleting the speaking document is the only
 document lifecycle command that explicitly stops speech.
 """
 import copy
+import re
 from pathlib import Path
-from PySide6.QtCore import Qt, QSignalBlocker
-from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QListWidgetItem, QFileDialog, QMessageBox, QInputDialog
+from PySide6.QtCore import QEvent, QSize, Qt, QSignalBlocker
+from PySide6.QtGui import QFont, QFontMetrics, QTextCursor
+from PySide6.QtWidgets import (
+    QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidgetItem, QMessageBox,
+    QSizePolicy, QToolButton, QWidget,
+)
+from . import i18n
 from .documents import new_document, atomic_write, read_txt
 from .editor import TextEditor
 from .file_import import read_document, editable_source
+
+
+def bookmark_display(title: str) -> str:
+    """Title text for the list, without Markdown emphasis marks."""
+    value = (title or "").strip()
+    value = re.sub(r"^#{1,6}\s+", "", value)
+    value = value.replace("**", "").replace("__", "").replace("`", "")
+    value = re.sub(r"\s+", " ", value).strip()
+    return value or (title or "").strip() or "Untitled"
+
+
+def fit_bookmark_text(text: str, metrics: QFontMetrics, width: int) -> str:
+    """One line, cut with an ellipsis so the name cannot paint over the next row."""
+    if not text or width < 48:
+        return text
+    return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+
+
+_ROW_HEIGHT = 36
+
+
+class BookmarkRow(QWidget):
+    """Title plus a close button for one library entry."""
+
+    def __init__(self, on_delete, on_menu, on_select, on_rename):
+        super().__init__()
+        self.setObjectName("bookmarkRow")
+        self.setFixedHeight(_ROW_HEIGHT)
+        self._full = ""
+        self._display = ""
+        self._on_select = on_select
+        self._on_rename = on_rename
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 4, 0)
+        layout.setSpacing(8)
+        self.title = QLabel()
+        self.title.setObjectName("bookmarkTitle")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
+        self.title.setWordWrap(False)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.title.setMinimumWidth(0)
+        font = QFont("Segoe UI")
+        font.setPixelSize(13)
+        font.setWeight(QFont.Weight.DemiBold)
+        self.title.setFont(font)
+        layout.addWidget(self.title, 1)
+        self.status = QLabel()
+        self.status.setObjectName("bookmarkStatus")
+        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status.setFixedWidth(14)
+        self.status.hide()
+        layout.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.close = QToolButton()
+        self.close.setObjectName("bookmarkClose")
+        self.close.setText("×")
+        self.close.setAutoRaise(True)
+        self.close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close.setFixedSize(22, 22)
+        self.close.clicked.connect(lambda _checked=False: on_delete())
+        layout.addWidget(self.close, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.title.installEventFilter(self)
+        for widget in (self, self.title, self.close):
+            widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            widget.customContextMenuRequested.connect(lambda pos, source=widget: on_menu(source, pos))
+
+    def eventFilter(self, watched, event):
+        if watched is self.title and event.type() == QEvent.Type.MouseButtonDblClick:
+            self._on_rename()
+            return True
+        if watched is self.title and event.type() == QEvent.Type.MouseButtonPress:
+            self._on_select()
+        return super().eventFilter(watched, event)
+
+    def set_title(self, text: str) -> None:
+        self._full = text
+        self._display = bookmark_display(text)
+        self._elide()
+
+    def set_status(self, text: str) -> None:
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+
+    def set_tips(self, delete_tip: str, menu_hint: str) -> None:
+        self.close.setToolTip(delete_tip)
+        self.close.setAccessibleName(delete_tip)
+        self.setToolTip(self._full + "\n" + menu_hint)
+        self.title.setToolTip(self._full + "\n" + menu_hint)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        width = self.title.width() - 2
+        if width < 48:
+            width = max(48, self.width() - self.close.sizeHint().width() - 48)
+        self.title.setText(fit_bookmark_text(self._display, QFontMetrics(self.title.font()), width))
 
 
 class DocumentController:
@@ -46,6 +149,7 @@ class DocumentController:
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, doc["id"])
         self.window.library.addItem(item)
+        self._attach_row(item)
         self.window.update_item(doc["id"])
         if select:
             self.window.filter.clear()
@@ -53,6 +157,25 @@ class DocumentController:
             editor.setFocus()
         self.window.schedule_save()
         return doc
+
+    def _attach_row(self, item):
+        doc_id = item.data(Qt.ItemDataRole.UserRole)
+        row = BookmarkRow(
+            lambda doc_id=doc_id: self.window.delete_bookmark(doc_id),
+            lambda source, pos, doc_id=doc_id: self.window.show_bookmark_menu_for(doc_id, source, pos),
+            lambda doc_id=doc_id: self.window.select_id(doc_id),
+            lambda doc_id=doc_id: (self.window.select_id(doc_id), self.window.rename_document()),
+        )
+        self.window.library.setItemWidget(item, row)
+        item.setSizeHint(row.sizeHint())
+
+    def repair_bookmark_rows(self):
+        """Qt drops the row widget when a list item is taken out and reinserted."""
+        for index in range(self.window.library.count()):
+            item = self.window.library.item(index)
+            if not isinstance(self.window.library.itemWidget(item), BookmarkRow):
+                self._attach_row(item)
+            self.window.update_item(item.data(Qt.ItemDataRole.UserRole))
 
     def select_id(self, doc_id):
         for index in range(self.window.library.count()):
@@ -69,7 +192,7 @@ class DocumentController:
         self.window.stack.setCurrentWidget(self.window.editor())
         blockers = [QSignalBlocker(widget) for widget in (self.window.provider, self.window.voice, self.window.rate, self.window.volume)]
         self.window.provider.setCurrentIndex(max(0, self.window.provider.findData(doc.get("provider", "piper"))))
-        self.window.reload_voices()
+        self.window.reload_voices(prefer=doc.get("voice"))
         self.window.voice.setCurrentIndex(self.window.voice.findData(doc.get("voice")))
         self.window.rate.setValue(doc.get("speed") or 1.0)
         volume = doc.get("volume")
@@ -92,27 +215,48 @@ class DocumentController:
     def update_item(self, doc_id):
         doc = self.window.documents[doc_id]
         state = self.window.playback.state if self.window.playback.active_playback_bookmark_id == doc_id else ""
-        label = doc["title"] + (" *" if doc.get("dirty") else "")
-        if state:
-            label += " — " + state.title()
+        shown = bookmark_display(doc["title"])
+        status = state.title() if state else ("●" if doc.get("dirty") else "")
         for index in range(self.window.library.count()):
             item = self.window.library.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == doc_id:
-                item.setText(label)
-                item.setToolTip(label + ("\n" + doc["path"] if doc.get("path") else ""))
-                item.setData(Qt.ItemDataRole.AccessibleTextRole, label)
+                item.setText("")
+                item.setData(Qt.ItemDataRole.UserRole + 1, doc["title"] + "\n" + shown)
+                item.setSizeHint(QSize(0, _ROW_HEIGHT))
+                path = "\n" + doc["path"] if doc.get("path") else ""
+                lang = self.window._lang()
+                hint = i18n.t("bookmark.menu.hint", lang)
+                item.setToolTip(doc["title"] + path + "\n" + hint)
+                item.setData(Qt.ItemDataRole.AccessibleTextRole, shown + (" " + status if status else ""))
+                row = self.window.library.itemWidget(item)
+                if isinstance(row, BookmarkRow):
+                    row.set_title(doc["title"])
+                    row.set_status(status)
+                    if status == "●":
+                        row.status.setToolTip(i18n.t("bookmark.unsaved.mark", lang))
+                    else:
+                        row.status.setToolTip(status)
+                    row.set_tips(i18n.t("bookmark.delete.tip", lang), hint + path)
                 break
 
     def filter_documents(self, query):
+        folded = query.casefold()
         for index in range(self.window.library.count()):
             item = self.window.library.item(index)
-            item.setHidden(query.casefold() not in item.text().casefold())
+            haystack = str(item.data(Qt.ItemDataRole.UserRole + 1) or "")
+            item.setHidden(folded not in haystack.casefold())
 
     def rename_document(self):
         doc = self.window.document()
         if not doc:
             return
-        title, ok = QInputDialog.getText(self.window, "Rename Bookmark", "Name:", text=doc["title"])
+        lang = self.window._lang()
+        title, ok = QInputDialog.getText(
+            self.window,
+            i18n.t("bookmark.rename.title", lang),
+            i18n.t("bookmark.rename.label", lang),
+            text=doc["title"],
+        )
         if ok and title.strip():
             doc["title"] = title.strip()[:200]
             self.window.document_heading.setText(doc["title"])
@@ -134,6 +278,7 @@ class DocumentController:
                 item = self.window.library.takeItem(row)
                 self.window.library.insertItem(target, item)
                 self.window.library.setCurrentItem(item)
+            self.repair_bookmark_rows()
             self.window.schedule_save()
 
     def next_document(self, direction):
@@ -143,7 +288,11 @@ class DocumentController:
     def protect_document(self, doc):
         if not doc.get("dirty"):
             return True
-        answer = QMessageBox.warning(self.window, "Unsaved text", f'Save changes to “{doc["title"]}” before closing?',
+        lang = self.window._lang()
+        answer = QMessageBox.warning(
+            self.window,
+            i18n.t("bookmark.unsaved.title", lang),
+            i18n.t("bookmark.unsaved.body", lang, title=doc["title"]),
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel)
         if answer == QMessageBox.StandardButton.Save:

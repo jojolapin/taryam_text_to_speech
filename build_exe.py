@@ -36,7 +36,8 @@ def installer_compiler() -> Path:
 def preflight(with_installer: bool) -> Path | None:
     if sys.platform != "win32":
         raise SystemExit("Build Windows packages on Windows.")
-    missing = [name for name in ("PyInstaller", "PySide6", "piper", "mutagen", "lameenc", "pypdf", "requests")
+    missing = [name for name in ("PyInstaller", "PySide6", "piper", "mutagen", "lameenc", "pypdf", "requests",
+                                 "kokoro_onnx", "espeakng_loader", "phonemizer")
                if importlib.util.find_spec(name) is None]
     if missing:
         raise SystemExit("Missing packages: " + ", ".join(missing) + ". Run setup.bat first.")

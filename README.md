@@ -32,6 +32,32 @@ when automating them. No build is required to use `run.bat`.
 If an existing copy is in the Windows tray, right-click its icon and choose **Show**
 to open it, or **Quit** before launching this checkout. Only one normal instance runs.
 
+## Voice cloning
+
+Pocket TTS is optional and stays out of the main Python environment. From the
+project folder, run `clone_runtime\setup.bat` once. That creates
+`clone_runtime\.venv` with a CPU build of Pocket TTS. TextSpeak Pro starts it
+on `127.0.0.1` only when you select a cloned voice, and the process exits after
+ten minutes without a request.
+
+Speech → Voice library → Add voice → Clone my voice. Import a WAV or MP3, or
+record from the microphone. You must confirm that the voice is yours or that
+you have permission to use it. English and French each get their own cached
+voice state. Automatic continues to use Kokoro, or Piper when Kokoro is
+unavailable. It does not select a cloned voice or OpenAI.
+
+The first clone downloads the English checkpoint and the larger French
+`french_24l` checkpoint from https://huggingface.co/kyutai/pocket-tts.
+Pocket TTS 2.1.0 code is MIT. Those weights are CC BY 4.0 and the repository
+is gated: sign in at that page and accept access before the download. A
+refused download leaves Kokoro, Piper, and OpenAI working. Healthy weight
+files are not downloaded again.
+
+Deleting `clone_runtime\.venv` removes the cloning runtime. Kokoro, Piper, and
+OpenAI keep working. Cloned profiles remain in
+`%APPDATA%\JojoLapin\TextSpeak Pro\voices\cloned\` until you delete them from
+the voice library. Model files are under `models\pocket` in that same folder.
+
 The equivalent source launch is:
 
 ```powershell
@@ -94,6 +120,10 @@ Normal Windows editor shortcuts remain native to the focused editor/control.
 
 Speech > Voices and Settings downloads Piper voices, configures optional OpenAI
 speech, speaking styles and Markdown mode, and offers the existing smart tools.
+The engine list also offers Kokoro, a local natural-voice library (several
+languages, male and female preset voices). Speech > Download Kokoro voices
+fetches about 330 MB once and caches it. Automatic uses Kokoro after that
+download and Piper before it. Automatic never sends text to OpenAI.
 Pronunciation substitutions can apply globally or to one bookmark. Audio export
 supports WAV/MP3; Piper can export separate files per paragraph. A reading timer,
 recent files, font/word-wrap preferences and System/Light/Dark themes are available.

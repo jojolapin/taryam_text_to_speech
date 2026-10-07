@@ -415,7 +415,12 @@ def test_native_dialogs_construct(window):
     pronunciation.add_rule({"from":"DAIDALUS", "to":"Day-da-lus"})
     pronunciation.save()
     assert window.settings.get_json("pronunciation_rules", [])[0]["to"] == "Day-da-lus"
-    settings.close()
+    settings.show()
+    settings.reject()
+    assert not settings.isVisible()
+    settings.show()
+    settings.save()
+    assert not settings.isVisible()
 
 
 def test_html_import_does_not_save_over_original(window, tmp_path):
@@ -438,6 +443,51 @@ def test_empty_and_multiple_imports_create_distinct_documents(window, tmp_path):
     assert b["title"] == "empty"
     assert len(window.documents) == 3
     assert window.document()["text"] == "Second"
+
+
+def test_bookmark_labels_are_one_clean_line(application):
+    from PySide6.QtGui import QFont, QFontMetrics
+    from app.document_controller import bookmark_display, fit_bookmark_text
+
+    assert bookmark_display("**IMPLEMENTATION STATUS: PASS**") == "IMPLEMENTATION STATUS: PASS"
+    assert bookmark_display("jojo") == "jojo"
+    font = QFont("Segoe UI")
+    font.setPixelSize(13)
+    metrics = QFontMetrics(font)
+    source = bookmark_display("**Use a detailed written project brief for the gateway**")
+    fitted = fit_bookmark_text(source, metrics, 140)
+    assert "**" not in fitted and "\n" not in fitted
+    assert fitted.endswith("…") or fitted.endswith("...")
+    assert metrics.horizontalAdvance(fitted) <= 140
+
+
+def test_bookmark_row_can_be_deleted_and_has_a_context_menu(window):
+    from app.document_controller import BookmarkRow
+
+    window.add_document(new_document(id="b", title="Second mark", text="clean", voice="test"))
+    window.select_id("a")
+    target = None
+    for index in range(window.library.count()):
+        item = window.library.item(index)
+        if item.data(Qt.ItemDataRole.UserRole) == "b":
+            target = item
+    row = window.library.itemWidget(target)
+    assert isinstance(row, BookmarkRow)
+    assert row.close.text() == "×"
+    row.close.click()
+    assert "b" not in window.documents
+    assert window.library.itemWidget(window.library.item(0)) is not None
+
+    window.settings.set("language", "fr")
+    window.add_document(new_document(id="c", title="Troisième", voice="test"))
+    current = window.library.currentItem()
+    labels = [action.text() for action in window.bookmark_menu(current).actions()]
+    assert "Renommer…\tF2" in labels
+    assert "Supprimer\tCtrl+W" in labels
+    assert "Dupliquer" in labels
+    window.move_document(-1)
+    rows = [window.library.itemWidget(window.library.item(index)) for index in range(window.library.count())]
+    assert all(isinstance(entry, BookmarkRow) and entry.title.text() for entry in rows)
 
 
 def test_per_document_format_overrides_legacy_global_preference(window):

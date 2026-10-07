@@ -35,10 +35,11 @@ class FakeSettings:
 
 
 class FakeResp:
-    def __init__(self, status_code=200, content=b"AUDIO", payload=None):
+    def __init__(self, status_code=200, content=b"AUDIO", payload=None, headers=None):
         self.status_code = status_code
         self.content = content
         self._payload = payload or {}
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -202,6 +203,9 @@ def test_synthesize_429_is_sanitized(monkeypatch):
     with pytest.raises(OpenAIError) as ei:
         p.synthesize("Hi")
     assert "rate limit" in str(ei.value).lower() or "quota" in str(ei.value).lower()
+    assert ei.value.limit["status"] == 429
+    assert ei.value.limit["kind"] == "unknown"
+    assert ei.value.limit["resets_at"] is None
 
 
 def test_synthesize_timeout_is_sanitized(monkeypatch):
@@ -381,3 +385,111 @@ def test_transform_malformed_response_is_sanitized(monkeypatch):
     with pytest.raises(OpenAIError) as ei:
         p.transform_text("hi", "clean")
     assert "unexpected" in str(ei.value).lower()
+
+
+# ---- HTTP 429: proof, reset time, no secrets --------------------------------
+
+def _raise_429(monkeypatch, payload, headers, now=1_700_000_000.0):
+    monkeypatch.setattr(oap, "_key_from_env_files", lambda: "")
+    monkeypatch.setattr(oap.time, "time", lambda: now)
+    sess = FakeSession(FakeResp(429, b"", payload, headers))
+    provider = OpenAIProvider(FakeSettings({"openai_api_key": "sk-secret"}), session=sess)
+    with pytest.raises(OpenAIError) as caught:
+        provider.synthesize("Hi")
+    return caught.value
+
+
+def test_429_credit_balance_has_no_return_date_and_hides_the_key(monkeypatch):
+    exc = _raise_429(monkeypatch, {
+        "error": {
+            "message": "You exceeded your current quota. Key sk-secret was used.",
+            "type": "insufficient_quota",
+            "code": "credit_balance_exhausted",
+        }
+    }, {"x-request-id": "req_credit1", "retry-after": "30"})
+    assert exc.limit["kind"] == "credits"
+    assert exc.limit["code"] == "credit_balance_exhausted"
+    assert exc.limit["request_id"] == "req_credit1"
+    assert exc.limit["resets_at"] is None
+    assert "sk-secret" not in str(exc)
+    encoded = oap.format_openai_error(exc)
+    assert "sk-secret" not in encoded
+    assert "[redacted]" in encoded
+    decoded = oap.decode_openai_limit(encoded)
+    assert decoded["summary"].startswith("OpenAI quota exceeded.")
+    assert decoded["limit"]["code"] == "credit_balance_exhausted"
+
+
+def test_429_rate_limit_uses_the_longest_empty_bucket(monkeypatch):
+    now = 1_700_000_000.0
+    exc = _raise_429(monkeypatch, {
+        "error": {
+            "message": "Rate limit reached. Please try again in 20s.",
+            "type": "tokens",
+            "code": "rate_limit_exceeded",
+        }
+    }, {
+        "x-request-id": "req_rate1",
+        "retry-after": "20",
+        "x-ratelimit-limit-requests": "500",
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-reset-requests": "1s",
+        "x-ratelimit-limit-tokens": "200000",
+        "x-ratelimit-remaining-tokens": "0",
+        "x-ratelimit-reset-tokens": "6m0s",
+    }, now=now)
+    assert exc.limit["kind"] == "rate_limit"
+    assert exc.limit["reset_source"] == "x-ratelimit-reset-tokens"
+    assert exc.limit["reset_seconds"] == 360
+    assert exc.limit["resets_at"] == now + 360
+    assert exc.limit["buckets"][0]["remaining"] == "0"
+    assert exc.limit["buckets"][0]["limit"] == "500"
+
+
+def test_429_rate_limit_reads_try_again_from_the_message(monkeypatch):
+    now = 1_700_000_000.0
+    exc = _raise_429(monkeypatch, {
+        "error": {
+            "message": "Rate limit reached for requests. Please try again in 12s.",
+            "type": "requests",
+            "code": "rate_limit_exceeded",
+        }
+    }, {}, now=now)
+    assert exc.limit["reset_source"] == "message"
+    assert exc.limit["resets_at"] == now + 12
+
+
+def test_429_org_spend_resets_at_next_utc_month(monkeypatch):
+    from datetime import datetime, timezone
+    now = datetime(2026, 10, 5, 20, 9, tzinfo=timezone.utc).timestamp()
+    exc = _raise_429(monkeypatch, {
+        "error": {
+            "message": "Organization spend limit reached.",
+            "type": "insufficient_quota",
+            "code": "organization_spend_limit_exceeded",
+        }
+    }, {"x-request-id": "req_spend1"}, now=now)
+    expected = datetime(2026, 11, 1, tzinfo=timezone.utc).timestamp()
+    assert exc.limit["kind"] == "org_spend"
+    assert exc.limit["reset_source"] == "monthly-utc"
+    assert exc.limit["resets_at"] == expected
+
+
+def test_429_december_spend_limit_rolls_to_january(monkeypatch):
+    from datetime import datetime, timezone
+    now = datetime(2026, 12, 18, 12, tzinfo=timezone.utc).timestamp()
+    exc = _raise_429(monkeypatch, {
+        "error": {"message": "limit", "type": "insufficient_quota", "code": "project_spend_limit_exceeded"}
+    }, {}, now=now)
+    assert exc.limit["resets_at"] == datetime(2027, 1, 1, tzinfo=timezone.utc).timestamp()
+
+
+def test_parse_delay_accepts_openai_durations_and_http_dates():
+    from datetime import datetime, timezone
+    assert oap.parse_delay_seconds("6m0s") == 360
+    assert oap.parse_delay_seconds("1s") == 1
+    assert oap.parse_delay_seconds("1500ms") == 1.5
+    assert oap.parse_delay_seconds("20") == 20
+    now = datetime(2025, 12, 1, tzinfo=timezone.utc).timestamp()
+    reset = oap.parse_delay_seconds("Thu, 01 Jan 2026 00:00:00 GMT", now=now)
+    assert reset == datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp() - now

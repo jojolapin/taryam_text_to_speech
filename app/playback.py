@@ -11,6 +11,9 @@ from PySide6.QtCore import QObject, Signal, Slot, QBuffer, QIODevice, QUrl
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from .chunking import chunk
+from .speech_engines.kokoro_engine import PLAYBACK_CHARS
+from .speech_engines.router import is_clone_voice, is_kokoro_voice
+from .openai_provider import is_openai_limit_message, openai_error_summary
 
 log = logging.getLogger("textspeak.playback")
 
@@ -104,7 +107,9 @@ class PlaybackManager(QObject):
         self.stop()  # Synchronous audio stop BEFORE assigning the new owner.
         self.document = copy.deepcopy(document)
         self.active_playback_bookmark_id = document["id"]
-        self.chunks = chunk(text[start:end], 260)
+        voice = document.get("voice", "")
+        limit = PLAYBACK_CHARS if is_kokoro_voice(voice) or is_clone_voice(voice) else 260
+        self.chunks = chunk(text[start:end], limit)
         for section in self.chunks:
             section["start"] += start
             section["end"] += start
@@ -227,5 +232,8 @@ class PlaybackManager(QObject):
     def _audio_failed(self, message):
         if self.active_playback_bookmark_id:
             self.stop()
-            log.error("Playback failed: %s", message)
-            self.error.emit("Speech playback failed. " + message)
+            log.error("Playback failed: %s", openai_error_summary(message))
+            if is_openai_limit_message(message):
+                self.error.emit(message)
+            else:
+                self.error.emit("Speech playback failed. " + message)
