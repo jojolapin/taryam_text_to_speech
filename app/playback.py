@@ -28,6 +28,7 @@ class AudioOutput(QObject):
         self.player = None
         self.buffer = None
         self.output = QAudioOutput(self)
+        self._end_armed = False
 
     def play(self, data, mime, volume):
         self.stop()
@@ -42,13 +43,16 @@ class AudioOutput(QObject):
         player.errorOccurred.connect(lambda error, message: self.failed.emit(message) if self.player is player else None)
         player.playbackStateChanged.connect(lambda state: self.started.emit() if self.player is player and state == QMediaPlayer.PlaybackState.PlayingState else None)
         player.setSourceDevice(self.buffer, QUrl("reading.wav" if "wav" in mime else "reading.mp3"))
+        self._end_armed = True
         player.play()
 
     def _status(self, player, status):
-        if player is self.player and status == QMediaPlayer.MediaStatus.EndOfMedia:
+        if player is self.player and self._end_armed and status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._end_armed = False
             self.ended.emit()
 
     def stop(self):
+        self._end_armed = False
         player, self.player = self.player, None
         if player:
             player.stop()
@@ -86,6 +90,10 @@ class PlaybackManager(QObject):
         self.requests = {}
         self.cache = {}
         self.current_loaded = False
+        self.session = 0
+        self.playing_index = None
+        self.started_blocks = set()
+        self.completed_blocks = set()
         bridge.synthesizeReady.connect(self._piper_ready)
         bridge.openaiAudioReady.connect(self._ready)
         bridge.synthesizeError.connect(self._failed)
@@ -104,7 +112,11 @@ class PlaybackManager(QObject):
         if not document.get("voice"):
             self.error.emit("Select or download a voice before playing.")
             return False
-        self.stop()  # Synchronous audio stop BEFORE assigning the new owner.
+        self.stop()  # Invalidates the previous session before this one starts.
+        self.session += 1
+        self.playing_index = None
+        self.started_blocks = set()
+        self.completed_blocks = set()
         self.document = copy.deepcopy(document)
         self.active_playback_bookmark_id = document["id"]
         voice = document.get("voice", "")
@@ -121,11 +133,18 @@ class PlaybackManager(QObject):
         self._request(1)
         return True
 
+    def _pending_indexes(self):
+        return {item[0] for item in self.requests.values()}
+
     def _request(self, index):
-        if index >= len(self.chunks) or index in self.cache or index in self.requests.values():
+        if index >= len(self.chunks) or index in self.cache or index in self._pending_indexes():
+            return
+        if index in self.started_blocks or index in self.completed_blocks:
+            return
+        if self.playing_index is not None and index <= self.playing_index:
             return
         request = "play-" + uuid.uuid4().hex
-        self.requests[request] = index
+        self.requests[request] = (index, self.session)
         doc = self.document
         # Freeze effective pronunciation per session, independent of navigation.
         self.bridge.set_pronunciation_rules(json.dumps(doc.get("effectiveRules", [])))
@@ -144,8 +163,11 @@ class PlaybackManager(QObject):
 
     @Slot(str, str, str)
     def _ready(self, request, data, mime):
-        index = self.requests.pop(request, None)
-        if index is None:
+        item = self.requests.pop(request, None)
+        if item is None:
+            return
+        index, session = item
+        if session != self.session or index in self.started_blocks or index in self.completed_blocks:
             return
         try:
             self.cache[index] = (base64.b64decode(data, validate=True), mime)
@@ -156,11 +178,15 @@ class PlaybackManager(QObject):
             self._play_current()
 
     def _play_current(self):
+        if self.index in self.started_blocks or self.index in self.completed_blocks:
+            return
         if self.index not in self.cache:
             self.state = "LOADING"
             self.changed.emit()
             return
         data, mime = self.cache.pop(self.index)
+        self.started_blocks.add(self.index)
+        self.playing_index = self.index
         self.current_loaded = True
         section = self.chunks[self.index]
         self.position.emit(self.active_playback_bookmark_id, section["start"])
@@ -179,7 +205,10 @@ class PlaybackManager(QObject):
     def _ended(self):
         if not self.active_playback_bookmark_id or not self.current_loaded:
             return
+        if self.index in self.completed_blocks:
+            return
         self.current_loaded = False
+        self.completed_blocks.add(self.index)
         self.position.emit(self.active_playback_bookmark_id, self.chunks[self.index]["end"])
         self.index += 1
         if self.index >= len(self.chunks):
@@ -187,6 +216,8 @@ class PlaybackManager(QObject):
             return
         if self.state != "PAUSED":
             self._play_current()
+        # The block now playing is already in started_blocks, so this does not
+        # synthesize it again. The following call only prefetches the next one.
         self._request(self.index)
         self._request(self.index + 1)
 
@@ -208,6 +239,10 @@ class PlaybackManager(QObject):
 
     def stop(self):
         requests, self.requests = self.requests, {}
+        self.session += 1
+        self.playing_index = None
+        self.started_blocks = set()
+        self.completed_blocks = set()
         self.audio.stop()
         for request in requests:
             self.bridge.cancel(request)
@@ -225,7 +260,8 @@ class PlaybackManager(QObject):
 
     @Slot(str, str)
     def _failed(self, request, message):
-        if request in self.requests:
+        item = self.requests.get(request)
+        if item is not None and item[1] == self.session:
             self._audio_failed(message)
 
     @Slot(str)
