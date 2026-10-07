@@ -57,14 +57,30 @@ def _read_wav(path: Path) -> tuple[np.ndarray, int]:
     return np.ascontiguousarray(samples, dtype=np.float32), int(rate)
 
 
+def _speech_threshold(samples: np.ndarray) -> float:
+    """Lower the activity gate when the whole take is quiet.
+
+    A Windows microphone often peaks around 0.08. Measuring those samples
+    against a fixed loud-speech level reports the take as empty.
+    """
+    if samples.size == 0:
+        return _SPEECH_RMS
+    peak = float(np.max(np.abs(samples)))
+    if peak < _EMPTY_PEAK or peak >= 0.2:
+        return _SPEECH_RMS
+    gain = min(0.7 / peak, 12.0)
+    return _SPEECH_RMS / gain
+
+
 def _speech_seconds(samples: np.ndarray, rate: int) -> float:
     if rate <= 0 or samples.size == 0:
         return 0.0
     frame = max(1, int(rate * _FRAME_S))
+    threshold = _speech_threshold(samples)
     count = 0
     for start in range(0, samples.size, frame):
         window = samples[start:start + frame]
-        if window.size and float(np.sqrt(np.mean(window * window))) >= _SPEECH_RMS:
+        if window.size and float(np.sqrt(np.mean(window * window))) >= threshold:
             count += 1
     return count * frame / rate
 
@@ -86,7 +102,7 @@ def analyze_samples(samples: np.ndarray, rate: int, channels: int) -> AudioRepor
             notes.append("short")
         if duration > POCKET_MAX_REFERENCE_S + 0.05:
             notes.append("long")
-        if peak < _QUIET_PEAK:
+        if peak < 0.2:
             notes.append("quiet")
         silence_ratio = 1.0 - (speech / duration) if duration else 1.0
         if silence_ratio > 0.55:
@@ -184,7 +200,7 @@ def prepare_wav(source: Path, dest: Path) -> tuple[AudioReport, list[str]]:
         trimmed = trimmed[:max_samples]
         actions.append("trim-30s")
     peak = float(np.max(np.abs(trimmed))) if trimmed.size else 0.0
-    if _EMPTY_PEAK <= peak < _QUIET_PEAK:
+    if _EMPTY_PEAK <= peak < 0.2:
         trimmed = trimmed * (0.7 / peak)
         actions.append("raise-level")
     prepared = _resample(trimmed, rate, TARGET_RATE)

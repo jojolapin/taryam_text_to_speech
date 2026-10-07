@@ -89,6 +89,15 @@ def data_dir(monkeypatch, tmp_path):
     return tmp_path
 
 
+def test_quiet_microphone_is_not_reported_as_empty(tmp_path):
+    quiet_voice = tmp_path / "mic.wav"
+    _wav(quiet_voice, _tone(6.0, amplitude=0.02))
+    report = analyze_wav(quiet_voice)
+    assert report.level == "warning"
+    assert "empty" not in report.notes
+    assert "quiet" in report.notes
+
+
 def test_reference_rejects_empty_short_and_clipped_audio(tmp_path):
     empty = tmp_path / "empty.wav"
     _wav(empty, np.zeros(16000 * 5, dtype=np.float32))

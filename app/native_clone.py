@@ -408,7 +408,9 @@ class CloneVoiceDialog(QDialog):
             self.window.show_error(i18n.t("clone.error.clone-audio-rejected", lang, detail=""))
             return
         if self._report is not None and self._report.level == "error":
-            self.analysis.setPlainText(format_report(self._report, lang))
+            message = format_report(self._report, lang)
+            self.analysis.setPlainText(message)
+            self.window.show_error(message)
             return
         display_name = self.name.text().strip()
         if not display_name:
